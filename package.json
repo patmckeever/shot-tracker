@@ -1,0 +1,35 @@
+{
+  "name": "pll-shot-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:vercel": "vercel dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "tsx scripts/test-champion-data.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "lucide-react": "^0.383.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vercel/node": "^3.2.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "tsx": "^4.15.0",
+    "typescript": "^5.4.5",
+    "vercel": "^53.1.1",
+    "vite": "^5.3.1"
+  }
+}

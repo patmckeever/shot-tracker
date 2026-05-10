@@ -1,0 +1,26 @@
+{
+  "buildCommand": "npm run build",
+  "devCommand": "vite",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "has": [
+        {
+          "type": "header",
+          "key": "accept",
+          "value": ".*text/html.*"
+        }
+      ],
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ]
+}

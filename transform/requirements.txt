@@ -1,0 +1,3 @@
+# Standard library is enough for the v1 transform — only adding pandas if/when
+# we need it for xG model loading. Keep this lean to make the QC person's setup
+# painless.
