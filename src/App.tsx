@@ -73,6 +73,8 @@ function teamStyle(code: string): TeamStyle {
 const FIELD_PIXEL_W = 2000;
 /** Cropped PLL field graphic (bottom trimmed); goal anchor still pll y=900 */
 const FIELD_PIXEL_H = 2149;
+/** Top raster inset of `field.png` before playable markings; shifts viewBox Y only (image size unchanged). */
+const FIELD_Y_DISPLAY_OFFSET = 351;
 /** Major gridlines every N px; light subdivisions half that when fine detail helps */
 const FIELD_GRID_MAJOR = 100;
 const FIELD_GRID_MINOR = 50;
@@ -131,14 +133,19 @@ function clientToViewBox(svg: SVGSVGElement, clientX: number, clientY: number) {
 
 /**
  * Raw SVG viewBox Y grows downward (0 at top). PLL shot y matches the league graphic
- * (goal line y=900, etc.). Convert with pllY = FIELD_PIXEL_H − viewBoxY.
+ * (goal line y=900, etc.). The field raster has empty space above the markings; playable
+ * Y is shifted by FIELD_Y_DISPLAY_OFFSET in viewBox space:
+ * pllY = FIELD_PIXEL_H − viewBoxY + FIELD_Y_DISPLAY_OFFSET.
  */
 function viewBoxYToPllY(viewBoxY: number): number {
-  return clampShotPixel(FIELD_PIXEL_H - viewBoxY, FIELD_PIXEL_H);
+  return clampShotPixel(
+    FIELD_PIXEL_H - viewBoxY + FIELD_Y_DISPLAY_OFFSET,
+    FIELD_PIXEL_H,
+  );
 }
 
 function pllYToViewBoxY(pllY: number): number {
-  return FIELD_PIXEL_H - pllY;
+  return FIELD_PIXEL_H - pllY + FIELD_Y_DISPLAY_OFFSET;
 }
 
 type FieldClickCanonical = { x: number; y: number };
