@@ -13,15 +13,15 @@
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getMatch, getMatchPersons, getMatchShots } from "../../lib/championData";
+import { getMatch, getMatchPersons, getMatchShots } from "../../lib/championData.js";
 import {
   enrichChampionRosterWithPllSide,
   rosterPlayersFromChampionPersons,
   type ChampionMatchPersonsResponse,
-} from "../../lib/matchRosters";
-import { getRostersForGameTryWeeks } from "../../lib/pllStats";
-import type { Player } from "../../lib/types";
-import { extractGame, extractShots, joinPllStats } from "../../lib/shotTransform";
+} from "../../lib/matchRosters.js";
+import { getRostersForGameTryWeeks } from "../../lib/pllStats.js";
+import type { Player } from "../../lib/types.js";
+import { extractGame, extractShots, joinPllStats } from "../../lib/shotTransform.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {

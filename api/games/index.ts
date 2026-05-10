@@ -6,7 +6,7 @@
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getSchedule, LEAGUE_IDS } from "../../lib/championData";
+import { getSchedule, LEAGUE_IDS } from "../../lib/championData.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
