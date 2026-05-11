@@ -77,9 +77,9 @@ export interface Shot {
   /** @cd */ goalie_id: string;
 
   // ── Champion Data event fields ──────────────────────────────────────────
-  /** @cd */ act: string;            // event type, e.g. "Shot"
-  /** @cd */ result: ShotResult;
-  /** @cd */ points: 1 | 2;
+  /** @cd */ act: string;            // "SH" | "TO"
+  /** @cd */ result: ShotResult | null; // null for TO rows
+  /** @cd */ points: 0 | 1 | 2;
   /** @cd */ goale_on_pipe_flag: 0 | 1;
   /** @cd */ goal_time: string | null;
   /** @cd */ time_spent: number | null;
@@ -125,11 +125,15 @@ export interface Shot {
   /** @tracker */ shot_location: string | null;
   /** @tracker */ ct_type: string | null;
   /** @tracker */ ct_ro_bl_player: string | null;
-  /** @tracker */ rebound: boolean | null;
+  /** @tracker | @flow offensive/defensive board: "O" | "D", or legacy boolean */
+  /** @tracker */ rebound: boolean | "O" | "D" | null;
   /** @tracker */ strong_or_wrong: string | null;
   /** @tracker */ big_chance: boolean | null;
   /** @tracker */ quality: string | null;
   /** @tracker */ down: string | null;
+
+  /** @cd All Champion metric codes for this trx id (metric flow), when available */
+  metric_codes?: string[] | null;
 }
 
 /**

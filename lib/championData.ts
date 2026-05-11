@@ -159,3 +159,11 @@ export async function getMatchShots(matchId: string) {
 export async function getMatchPersons(matchId: string) {
   return cdFetch(`/v1/matches/${matchId}/persons`);
 }
+
+/**
+ * GET /v1/matches/:matchId/flow/metric
+ * Metric-level timeline (turnovers, shot flags, etc.).
+ */
+export async function getMatchMetricFlow(matchId: string) {
+  return cdFetch(`/v1/matches/${matchId}/flow/metric`);
+}

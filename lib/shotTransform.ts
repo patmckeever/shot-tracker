@@ -9,6 +9,7 @@
  */
 
 import type { Game, Player, Shot } from "./types";
+import { sortShotsChronologically } from "./metricFlow";
 
 /** Minimal shape of MatchInfo from `GET /v1/matches/:matchId`. */
 export interface ChampionMatchInfo {
@@ -137,6 +138,7 @@ export function extractShots(game: Game, matchInfo: ChampionMatchInfo, transacti
     const assistNm = personName(ev.assistPlayer);
     const goalieNm = personName(ev.goalkeeperPlayer);
 
+    const trxResult = shotTransactionResult(ev);
     const shot: Shot = {
       shot_id: `${game.game_id}_${trxId}`,
       unique_id: String(trxId),
@@ -155,9 +157,9 @@ export function extractShots(game: Game, matchInfo: ChampionMatchInfo, transacti
       goalie: goalieNm,
       goalie_id: ev.goalkeeperPlayer?.id != null ? String(ev.goalkeeperPlayer.id) : "",
 
-      act: "Shot",
-      result: shotTransactionResult(ev),
-      points: shotPoints(ev),
+      act: "SH",
+      result: trxResult,
+      points: trxResult === "GOAL" ? shotPoints(ev) : 0,
       goale_on_pipe_flag: 0,
       goal_time: null,
       time_spent: null,
@@ -202,12 +204,13 @@ export function extractShots(game: Game, matchInfo: ChampionMatchInfo, transacti
       big_chance: null,
       quality: null,
       down: null,
+      metric_codes: null,
     };
 
     shots.push(shot);
   }
 
-  return shots;
+  return sortShotsChronologically(shots);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

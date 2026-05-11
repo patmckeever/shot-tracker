@@ -12,6 +12,8 @@ interface GameLoadResponse {
     away: { team: string; players: Player[] };
   };
   shots: Shot[];
+  /** Champion `GET /v1/matches/:id/flow/metric` payload (may be null if fetch failed). */
+  metric_flow: unknown | null;
 }
 
 /** Leagues exposed in the game picker (maps to `lib/championData` LEAGUE_IDS). */
@@ -22,6 +24,7 @@ interface GameListResponse {
   league: string;
   matches: {
     match_id: string;
+    game_number: number;
     week: number | null;
     date: string | null;
     home: string | null;

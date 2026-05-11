@@ -13,7 +13,7 @@
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getMatch, getMatchPersons, getMatchShots } from "../../lib/championData.js";
+import { getMatch, getMatchMetricFlow, getMatchPersons, getMatchShots, getSchedule, LEAGUE_IDS } from "../../lib/championData.js";
 import {
   enrichChampionRosterWithPllSide,
   rosterPlayersFromChampionPersons,
@@ -22,6 +22,17 @@ import {
 import { getRostersForGameTryWeeks } from "../../lib/pllStats.js";
 import type { Player } from "../../lib/types.js";
 import { extractGame, extractShots, joinPllStats } from "../../lib/shotTransform.js";
+import { gameNumberForMatch, sortMatchesChronologically } from "../../lib/scheduleGameNumber.js";
+
+async function resolveGameNumber(matchId: string, season: number): Promise<number> {
+  for (const league_id of [LEAGUE_IDS.pll_regular, LEAGUE_IDS.champ_series]) {
+    const schedule = await getSchedule({ season_id: season, league_id });
+    const sorted = sortMatchesChronologically(schedule.matches ?? []);
+    const n = gameNumberForMatch(sorted, matchId);
+    if (n > 0) return n;
+  }
+  return 0;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
@@ -34,6 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const match = await getMatch(matchId);
     const game = extractGame(match);
+    game.game_number = await resolveGameNumber(matchId, game.season);
     const matchShots = await getMatchShots(matchId);
     const shots = extractShots(game, match, matchShots.shots ?? []);
 
@@ -63,6 +75,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const allPlayers = [...homePlayers, ...awayPlayers];
     if (allPlayers.length > 0) joinPllStats(shots, allPlayers);
 
+    let metric_flow: unknown = null;
+    try {
+      metric_flow = await getMatchMetricFlow(matchId);
+    } catch (e) {
+      console.warn(`Metric flow unavailable for ${matchId}:`, e);
+    }
+
     // Cache for 5 min at edge — match data doesn't change often once a game is final.
     // For live games, the tracker can force a fresh load via cache-bust query param.
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=900");
@@ -74,6 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         away: { team: game.away_team, players: awayPlayers },
       },
       shots,
+      metric_flow,
     });
   } catch (err: any) {
     console.error(`/api/games/${matchId} error:`, err);

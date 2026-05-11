@@ -6,7 +6,8 @@
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getSchedule, LEAGUE_IDS } from "../../lib/championData.js";
+import { getSchedule, LEAGUE_IDS, type ChampionScheduleMatchRow } from "../../lib/championData.js";
+import { sortMatchesChronologically } from "../../lib/scheduleGameNumber.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
@@ -20,10 +21,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const schedule = await getSchedule({ season_id: season, league_id });
 
-    // TODO: shape the response based on actual Champion Data schema.
-    // The notebook iterates `matches` so we mirror that.
-    const matches = (schedule.matches ?? []).map((m: any) => ({
+    const raw: ChampionScheduleMatchRow[] = schedule.matches ?? [];
+    const sorted = sortMatchesChronologically(raw);
+    const matches = sorted.map((m, i) => ({
       match_id: String(m.matchId),
+      game_number: i + 1,
       week: m.round ?? null,
       date: m.localStartTime ?? null,
       home: m.homeSquadCode ?? null,

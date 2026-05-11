@@ -1,8 +1,17 @@
 """
-transform.py - Lean CSV → Stats Master row.
+transform.py - Optional post-pass for exported tracker CSV.
 
-Reads the CSV emitted by the shot tracker app and produces the full
-73-column Stats Master row by adding @derived columns:
+The React app (`src/lib/csv.ts`) now emits the full Stats Master column set in
+one step (including `shot_distance` from the PLL graphic pixel→yards formula).
+Use this script only when you need to **recompute** yard geometry from x/y
+treated as field yards, fill xG/xSv placeholders, or batch-derive older lean
+exports.
+
+Historically this read a "lean" CSV and produced a 73-column row. MASTER_COLUMNS
+below matches `buildStatsMasterCsv` in the app (including trailing
+bounce_shot → net_x → net_y → arm_angle → arm_angle_degrees).
+
+Reads the CSV emitted by the shot tracker app and can add / overwrite @derived columns:
 
   - Distance + angle math (shot_distance, distance_gle, distance_from_rp/lp,
     distance_pipe_to_pipe, visible_shot_angle, goalie_arc_angle, is_hand_inside)
@@ -117,7 +126,7 @@ def derive(row: dict) -> dict:
     return out
 
 
-# Final Stats Master column order (the 73-column schema)
+# Final Stats Master column order (must match src/lib/csv.ts STATS_MASTER_HEADERS)
 MASTER_COLUMNS = [
     "game_number", "qtr", "unique_id", "game_id", "team", "act", "player",
     "situation", "dodge_action", "dodge_location", "shot_hand", "result",
@@ -137,8 +146,7 @@ MASTER_COLUMNS = [
     "one_point_shot_flag", "second_assist_flag", "goale_on_pipe_flag",
     "defender_position", "is_hand_inside", "xg_old", "xG", "xSv", "season",
     "quality", "down", "nationality", "PasserShooter",
-    # New columns
-    "bounce_shot", "arm_angle", "arm_angle_degrees", "net_x", "net_y",
+    "bounce_shot", "net_x", "net_y", "arm_angle", "arm_angle_degrees",
 ]
 
 

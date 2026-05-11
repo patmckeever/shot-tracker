@@ -35,7 +35,9 @@ import {
 } from "../lib/types";
 import { API, type GameListLeague } from "./lib/api";
 import { Storage } from "./lib/storage";
-import { shotsToLeanCsv, downloadCsv, incompleteShots } from "./lib/csv";
+import { buildStatsMasterCsv, downloadCsv, incompleteShots } from "./lib/csv";
+import { pllShotDistanceYards } from "../lib/shotGraphicDistance";
+import { sortShotsChronologically } from "../lib/metricFlow";
 import fieldGraphicUrl from "../field.png";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,21 +80,6 @@ const FIELD_Y_DISPLAY_OFFSET = 351;
 /** Major gridlines every N px; light subdivisions half that when fine detail helps */
 const FIELD_GRID_MAJOR = 100;
 const FIELD_GRID_MINOR = 50;
-
-/** PLL shot-graphic goal anchor (pixel space) */
-const PLL_GOAL_CENTER_X = 1000;
-const PLL_GOAL_LINE_Y = 900;
-const PLL_SCALE_PER_YARD = 40.29;
-const PLL_CALIBRATION = 0.88;
-
-function pllRawToYards(rawDist: number): number {
-  return (rawDist / PLL_SCALE_PER_YARD) * PLL_CALIBRATION;
-}
-
-/** Distance from shot (x,y) to goal center (1000, 900), in calibrated yards */
-function pllFromNetYards(px: number, py: number): number {
-  return pllRawToYards(Math.hypot(px - PLL_GOAL_CENTER_X, py - PLL_GOAL_LINE_Y));
-}
 
 /** 3×3 region from net / miss-plane coordinates (goal & save: 0–72 mouth; miss: 144×108 plane). Lower y → bottom. */
 function netPickRegionLabel(
@@ -313,7 +300,7 @@ function Field({ shots, activeShotId, onFieldClick, onHoverShot, besideSidebar =
               {x},{y}
             </span>{" "}
             <span className="text-zinc-500">·</span>{" "}
-            <span className="text-amber-400">{pllFromNetYards(x, y).toFixed(1)}yd</span>
+            <span className="text-amber-400">{pllShotDistanceYards(x, y).toFixed(1)}yd</span>
           </div>
         );
       })()}
@@ -487,6 +474,13 @@ function bucketFromDegrees(deg: number): (typeof ARM_ANGLE_BUCKETS)[number] {
   return b ?? ARM_ANGLE_BUCKETS[ARM_ANGLE_BUCKETS.length - 1];
 }
 
+function computeNormalizedPoints(s: Shot, act: string): 0 | 1 | 2 {
+  if (act === "TO" || !s.result || s.result !== "GOAL") return 0;
+  const p = s.points;
+  if (p === 1 || p === 2) return p;
+  return 1;
+}
+
 /** Map removed buckets + strip net coords on misses (Saves/Goals keep net pick). */
 function normalizeLoadedShot(s: Shot): Shot {
   const deg = s.arm_angle_degrees;
@@ -498,9 +492,15 @@ function normalizeLoadedShot(s: Shot): Shot {
     else if (a === "three_quarter") arm_angle = "overhand";
     else if (a === "underhand" || a === "sidearm" || a === "overhand") arm_angle = a;
   }
-  const stripNet = s.result === "MISS";
+  const stripNet = (s.result ?? "MISS") === "MISS";
+  const rawAct = s.act && s.act !== "" ? s.act : "SH";
+  const act = rawAct === "Shot" ? "SH" : rawAct;
+  const points: 0 | 1 | 2 = computeNormalizedPoints(s, act);
   return {
     ...s,
+    act,
+    points,
+    result: s.result === undefined || s.result === null ? (act === "TO" ? null : "MISS") : s.result,
     arm_angle,
     net_x: stripNet ? null : s.net_x,
     net_y: stripNet ? null : s.net_y,
@@ -1147,7 +1147,7 @@ function ShotChecklist({ shot, compact = false }: { shot: Shot; compact?: boolea
     { label: "Clock", done: shot.shot_clock !== null },
     { label: "Bounce", done: shot.bounce_shot !== null },
     { label: "Arm", done: shot.arm_angle !== null },
-    { label: shot.result === "MISS" ? "Miss" : "Net Location", done: shot.net_x !== null },
+    { label: (shot.result ?? "MISS") === "MISS" ? "Miss" : "Net Location", done: shot.net_x !== null },
   ];
   return (
     <div className={`bg-zinc-950 border border-zinc-800 rounded h-full ${compact ? "p-1.5" : "p-2"}`}>
@@ -1209,6 +1209,7 @@ function displayGameClockElapsedFrom12(clock: string, qtr: Shot["qtr"]): string 
 
 interface ApiMatchRow {
   match_id: string;
+  game_number: number;
   week: number | null;
   date: string | null;
   home: string | null;
@@ -1237,6 +1238,7 @@ export default function App() {
   const [hoverShot, setHoverShot] = useState<Shot | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [metricFlow, setMetricFlow] = useState<unknown | null>(null);
   const [pickerGames, setPickerGames] = useState<ApiMatchRow[]>([]);
   const [pickerSeason, setPickerSeason] = useState(() => new Date().getFullYear());
   const [pickerLeague, setPickerLeague] = useState<GameListLeague>("pll_regular");
@@ -1262,6 +1264,7 @@ export default function App() {
       setHoverShot(null);
       setLoading(false);
       setLastSaved(null);
+      setMetricFlow(null);
       return;
     }
 
@@ -1272,6 +1275,7 @@ export default function App() {
         const data = await API.loadGame(gameId);
         if (cancelled) return;
         setGame(data.game);
+        setMetricFlow(data.metric_flow ?? null);
         setRosters({
           [data.rosters.home.team]: data.rosters.home.players,
           [data.rosters.away.team]: data.rosters.away.players,
@@ -1280,12 +1284,27 @@ export default function App() {
         const cachedState = Storage.loadState(gameId);
         const freshByShotId = new Map(data.shots.map((s) => [s.shot_id, s]));
         const rawList = cached ?? data.shots;
+        const gn = data.game.game_number;
         const list = rawList.map((s) => {
           const fresh = freshByShotId.get(s.shot_id);
-          return fresh ? { ...s, shooter_dominant_hand: fresh.shooter_dominant_hand } : s;
+          const merged = fresh ? { ...s, shooter_dominant_hand: fresh.shooter_dominant_hand } : s;
+          return { ...merged, game_number: gn };
         });
-        setShots(list.map(normalizeLoadedShot));
-        setActiveIdx(cachedState?.active_idx ?? 0);
+        const normalized = list.map(normalizeLoadedShot);
+        const prevActiveId =
+          cachedState != null &&
+          cachedState.active_idx >= 0 &&
+          cachedState.active_idx < normalized.length
+            ? normalized[cachedState.active_idx]?.shot_id
+            : null;
+        const sorted = sortShotsChronologically(normalized);
+        setShots(sorted);
+        if (prevActiveId) {
+          const ni = sorted.findIndex((x) => x.shot_id === prevActiveId);
+          setActiveIdx(ni >= 0 ? ni : 0);
+        } else {
+          setActiveIdx(0);
+        }
       } catch (err) {
         console.error("Failed to load game:", err);
       } finally {
@@ -1361,6 +1380,7 @@ export default function App() {
   );
 
   const activeShot = shots[activeIdx];
+  const activeResult: ShotResult = activeShot?.result ?? "MISS";
 
   useEffect(() => {
     setShots((prev) => {
@@ -1430,12 +1450,13 @@ export default function App() {
       );
       if (!proceed) return;
     }
-    downloadCsv(`shots_${gameId}.csv`, shotsToLeanCsv(shots));
+    if (!game) return;
+    downloadCsv(`shots_${gameId}.csv`, buildStatsMasterCsv(game, shots, rosters, metricFlow));
   };
 
   const gameTitle =
     game != null
-      ? `Week ${game.week} — ${game.away_team} @ ${game.home_team}`
+      ? `Week ${game.week} · Game ${game.game_number} — ${game.away_team} @ ${game.home_team}`
       : gameId
         ? `Match ${gameId}`
         : "";
@@ -1535,7 +1556,7 @@ export default function App() {
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-xs font-mono text-zinc-500">
-                        {g.date ?? "—"} · {roundLabel} {g.week ?? "?"}
+                        #{g.game_number} · {g.date ?? "—"} · {roundLabel} {g.week ?? "?"}
                       </div>
                       <div className="text-sm font-semibold mt-0.5">
                         {roundLabel} {g.week ?? "?"} — {g.away ?? "?"} @ {g.home ?? "?"}
@@ -1674,7 +1695,7 @@ export default function App() {
               <div className="text-[9px] font-mono px-1 py-0.5 bg-zinc-900 rounded text-zinc-300 whitespace-nowrap">
                 {formatQtr(activeShot.qtr)} {displayGameClockElapsedFrom12(activeShot.game_clock, activeShot.qtr)}
               </div>
-              <ResultBadge result={activeShot.result} compact />
+              <ResultBadge result={activeResult} compact />
             </div>
 
             <div className="flex items-center gap-2 min-w-0">
@@ -1688,7 +1709,7 @@ export default function App() {
                 subLine={
                   <div className="text-[8px] font-mono text-zinc-500 flex items-center gap-1 flex-wrap mt-px">
                     <span>
-                      {activeShot.team} · SH ·{" "}
+                      {activeShot.team} · {activeShot.act} ·{" "}
                       {shotHand ? (
                         <span
                           className="font-bold px-0.5 rounded"
@@ -1857,15 +1878,15 @@ export default function App() {
 
             <div className="bg-zinc-950 border border-zinc-800 rounded-sm p-0.5 min-w-0 flex flex-col">
               <div className="text-[8px] uppercase tracking-wider text-amber-500 font-mono mb-0 leading-none flex items-start justify-between gap-1 px-0.5 pt-0.5">
-                <span className="shrink-0">{activeShot.result === "MISS" ? "MISS" : "NET LOCATION"}</span>
+                <span className="shrink-0">{activeResult === "MISS" ? "MISS" : "NET LOCATION"}</span>
                 <span className="text-[7px] text-zinc-500 font-mono text-right leading-tight line-clamp-2 break-words min-w-0 max-w-[62%]">
-                  {netPickRegionLabel(activeShot.net_x, activeShot.net_y, activeShot.result) ?? "—"}
+                  {netPickRegionLabel(activeShot.net_x, activeShot.net_y, activeResult) ?? "—"}
                 </span>
               </div>
               <div className="w-full min-w-0">
                 <GoalPlanePicker
-                  onGoal={activeShot.result !== "MISS"}
-                  interactive={activeShot.result !== "MISS"}
+                  onGoal={activeResult !== "MISS"}
+                  interactive={activeResult !== "MISS"}
                   netX={activeShot.net_x}
                   netY={activeShot.net_y}
                   onGoalClick={({ net_x, net_y }) => updateShot({ net_x, net_y })}
