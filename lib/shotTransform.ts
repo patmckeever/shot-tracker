@@ -8,8 +8,8 @@
  * @tracker fields stay null until the UI fills them.
  */
 
-import type { Game, Player, Shot } from "./types";
-import { sortShotsChronologically } from "./metricFlow";
+import type { Game, Player, Shot } from "./types.js";
+import { sortShotsChronologically } from "./metricFlow.js";
 
 /** Minimal shape of MatchInfo from `GET /v1/matches/:matchId`. */
 export interface ChampionMatchInfo {

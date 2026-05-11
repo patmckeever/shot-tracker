@@ -2,8 +2,8 @@
  * Champion metric flow — merge /shots tracker rows with TO rows and flow-derived rebound / CT fields.
  */
 
-import type { Game, Shot } from "./types";
-import { encodeShotResultLetter } from "./csvFieldEncoding";
+import type { Game, Shot } from "./types.js";
+import { encodeShotResultLetter } from "./csvFieldEncoding.js";
 
 function qtrFromPeriod(period: number): 1 | 2 | 3 | 4 | 5 {
   if (period <= 1) return 1;

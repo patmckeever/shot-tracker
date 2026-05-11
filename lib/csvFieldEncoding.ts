@@ -2,7 +2,7 @@
  * Single-letter / coded CSV fields aligned with Stats Master + metric-flow semantics.
  */
 
-import type { Shot } from "./types";
+import type { Shot } from "./types.js";
 
 const LOC_ALIAS: Record<string, string> = {
   D: "D",

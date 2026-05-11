@@ -1,4 +1,4 @@
-import type { ChampionScheduleMatchRow } from "./championData";
+import type { ChampionScheduleMatchRow } from "./championData.js";
 
 function parseStartTime(iso: string | null | undefined): number {
   if (!iso) return Number.MAX_SAFE_INTEGER;

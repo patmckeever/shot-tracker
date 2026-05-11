@@ -1,0 +1,24 @@
+---
+description: Node ESM (Vercel serverless, lib/, api/) must use explicit .js on relative imports
+globs: lib/**/*.ts,api/**/*.ts
+alwaysApply: false
+---
+
+# Node ESM relative imports (`lib/`, `api/`)
+
+This repo uses `"type": "module"` in `package.json`. Vercel compiles **`api/**/*.ts`** and shared **`lib/**/*.ts`** for **Node**, not Vite bundling.
+
+Node’s ESM resolver does **not** apply TypeScript-style extension rewriting. At runtime imports like `from "./metricFlow"` fail (`ERR_MODULE_NOT_FOUND`); they must resolve to an actual filename, e.g. `metricFlow.js`.
+
+## Required convention
+
+For **any relative import between project files** under `lib/` and `api/`:
+
+- Write the import path ending in **`.js`**, including for TypeScript sources (TypeScript resolves the corresponding `.ts` file at compile time).
+
+**Do:** `from "./metricFlow.js"`, `from "../../lib/types.js"`  
+**Don’t:** `from "./metricFlow"`, `from "../../lib/types"`
+
+`src/` stays on Vite; extensionless relatives there are fine for the bundler. **Do not fix `src/`** for this unless something starts running under Node ESM.
+
+Before finishing a change in `lib/` or `api/`, skim new `from '.'` / `from '..'` imports and confirm every one ends with `.js`.

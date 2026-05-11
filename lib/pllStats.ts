@@ -15,7 +15,7 @@
  * - Roster rows expose `handedness`, `country`, `profileUrl` on `playersGameStats` (`Player`).
  */
 
-import type { Player } from "./types";
+import type { Player } from "./types.js";
 
 const PLL_GRAPHQL = "https://api.stats.premierlacrosseleague.com/graphql";
 

@@ -2,7 +2,7 @@
  * Build tracker rosters from Champion match persons + optional PLL Stats enrichment.
  */
 
-import type { Player } from "./types";
+import type { Player } from "./types.js";
 
 export interface ChampionPersonRaw {
   personId?: number;

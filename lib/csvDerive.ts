@@ -2,8 +2,8 @@
  * Derived CSV fields aligned with transform/transform.py derive().
  */
 
-import type { Shot } from "./types";
-import { encodeShotResultLetter } from "./csvFieldEncoding";
+import type { Shot } from "./types.js";
+import { encodeShotResultLetter } from "./csvFieldEncoding.js";
 
 export function deriveSaveSogFlags(s: Shot) {
   const letter = s.act === "SH" && s.result ? encodeShotResultLetter(s) : "";
