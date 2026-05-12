@@ -197,6 +197,8 @@ export function extractShots(game: Game, matchInfo: ChampionMatchInfo, transacti
       dodge_action: null,
       dodge_location: null,
       shot_location: ev.details?.shotLocation ?? null,
+      shot_type: "",
+      one_hand: 0,
       ct_type: null,
       ct_ro_bl_player: null,
       rebound: null,

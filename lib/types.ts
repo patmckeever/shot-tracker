@@ -123,6 +123,10 @@ export interface Shot {
   /** @tracker */ dodge_action: string | null;
   /** @tracker */ dodge_location: string | null;
   /** @tracker */ shot_location: string | null;
+  /** @tracker "" = Normal (blank in export); ATW/BTB/BH/TTL for trick shot types */
+  shot_type: "" | "ATW" | "BTB" | "BH" | "TTL";
+  /** @tracker 1 = one-handed, 0 = not (defaults to 0); not part of yellow “in progress” UX */
+  one_hand: 0 | 1;
   /** @tracker */ ct_type: string | null;
   /** @tracker */ ct_ro_bl_player: string | null;
   /** @tracker | @flow offensive/defensive board: "O" | "D", or legacy boolean */
@@ -161,4 +165,31 @@ export function isSecondAssistChoiceComplete(s: Shot): boolean {
   if (!s.first_assist) return true;
   const id = s.second_assist_id;
   return id != null && id !== "";
+}
+
+/** True when every tracker field for a shot (`act === "SH"`) row is answered. Turnovers excluded. */
+export function isShotManualTrackingComplete(s: Shot): boolean {
+  if (s.act === "TO") return false;
+  if (s.x === null || s.y === null) return false;
+  if (!isDefenderChoiceComplete(s)) return false;
+  if (!isSecondAssistChoiceComplete(s)) return false;
+  if (s.shot_clock === null) return false;
+  if (s.bounce_shot === null) return false;
+  if (s.arm_angle === null) return false;
+  if (s.net_x === null) return false;
+  return true;
+}
+
+/** True if any manual tracker fields that drive "meaningful progress" / yellow state are filled (excludes shot_type + one_hand). */
+export function hasMeaningfulManualProgress(s: Shot): boolean {
+  if (s.act === "TO") return false;
+  return (
+    s.x !== null ||
+    s.shot_clock !== null ||
+    s.bounce_shot !== null ||
+    s.arm_angle !== null ||
+    s.net_x !== null ||
+    isDefenderChoiceComplete(s) ||
+    (s.first_assist ? isSecondAssistChoiceComplete(s) : false)
+  );
 }

@@ -131,6 +131,8 @@ function syntheticToRow(game: Game, id: string, qtr: 1 | 2 | 3 | 4 | 5, clock: s
     dodge_action: null,
     dodge_location: null,
     shot_location: null,
+    shot_type: "",
+    one_hand: 0,
     ct_type: null,
     ct_ro_bl_player: null,
     rebound: null,

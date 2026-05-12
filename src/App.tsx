@@ -29,8 +29,10 @@ import {
 import type { Game, Player, Shot, ShotResult, ArmAngleBucket } from "../lib/types";
 import {
   TRACKER_NO_PLAYER_ID,
+  hasMeaningfulManualProgress,
   isDefenderChoiceComplete,
   isSecondAssistChoiceComplete,
+  isShotManualTrackingComplete,
   isTrackerNoPlayerId,
 } from "../lib/types";
 import { API, type GameListLeague } from "./lib/api";
@@ -39,6 +41,15 @@ import { buildStatsMasterCsv, downloadCsv, incompleteShots } from "./lib/csv";
 import { pllShotDistanceYards } from "../lib/shotGraphicDistance";
 import { sortShotsChronologically } from "../lib/metricFlow";
 import fieldGraphicUrl from "../field.png";
+
+/** Trick shot codes for CSV (`shot_type`); empty string exports blank = normal shot. */
+const SHOT_TRACKER_TYPE_OPTIONS = [
+  { value: "", label: "Normal" },
+  { value: "ATW", label: "ATW · Around-the-world" },
+  { value: "BTB", label: "BTB · Behind-the-back" },
+  { value: "BH", label: "BH · Backhanded" },
+  { value: "TTL", label: "TTL · Through-the-legs" },
+] as const satisfies readonly { value: Shot["shot_type"]; label: string }[];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Team colors + Champion abbreviation aliases
@@ -481,6 +492,15 @@ function computeNormalizedPoints(s: Shot, act: string): 0 | 1 | 2 {
   return 1;
 }
 
+function normalizeShotType(raw: unknown): Shot["shot_type"] {
+  if (raw === "ATW" || raw === "BTB" || raw === "BH" || raw === "TTL") return raw;
+  return "";
+}
+
+function normalizeOneHand(raw: unknown): 0 | 1 {
+  return raw === 1 || raw === "1" ? 1 : 0;
+}
+
 /** Map removed buckets + strip net coords on misses (Saves/Goals keep net pick). */
 function normalizeLoadedShot(s: Shot): Shot {
   const deg = s.arm_angle_degrees;
@@ -504,6 +524,8 @@ function normalizeLoadedShot(s: Shot): Shot {
     arm_angle,
     net_x: stripNet ? null : s.net_x,
     net_y: stripNet ? null : s.net_y,
+    shot_type: normalizeShotType(s.shot_type),
+    one_hand: normalizeOneHand(s.one_hand),
   };
 }
 
@@ -1139,6 +1161,12 @@ function ResultBadge({ result, compact = false }: { result: ShotResult; compact?
 
 function ShotChecklist({ shot, compact = false }: { shot: Shot; compact?: boolean }) {
   const items = [
+    ...(shot.act === "SH"
+      ? [
+          { label: "Shot hand", done: true },
+          { label: "One hand", done: true },
+        ]
+      : []),
     { label: "Location", done: shot.x !== null },
     { label: "Defender", done: isDefenderChoiceComplete(shot) },
     ...(shot.first_assist
@@ -1430,16 +1458,15 @@ export default function App() {
   }, [goPrev, goNext, goNextUnmarked]);
 
   const completion = useMemo(() => {
-    const total = shots.length;
-    const marked = shots.filter((s) => s.x !== null).length;
-    const fullyTracked = shots.filter(
-      (s) =>
-        s.x !== null &&
-        isDefenderChoiceComplete(s) &&
-        isSecondAssistChoiceComplete(s) &&
-        s.shot_clock !== null,
-    ).length;
-    return { total, marked, fullyTracked };
+    const tracked = shots.filter((s) => s.act !== "TO");
+    const total = tracked.length;
+    const marked = tracked.filter((s) => s.x !== null).length;
+    const fullyTracked = tracked.filter(isShotManualTrackingComplete).length;
+    const showYellowProgress =
+      total > 0 &&
+      fullyTracked < total &&
+      tracked.some((s) => !isShotManualTrackingComplete(s) && hasMeaningfulManualProgress(s));
+    return { total, marked, fullyTracked, showYellowProgress };
   }, [shots]);
 
   const exportCSV = () => {
@@ -1652,8 +1679,16 @@ export default function App() {
           </div>
           <div className="w-24 sm:w-32 h-0.5 bg-zinc-900 rounded overflow-hidden shrink-0">
             <div
-              className="h-full bg-amber-500"
-              style={{ width: `${(completion.fullyTracked / completion.total) * 100}%` }}
+              className={`h-full ${
+                completion.total > 0 && completion.fullyTracked === completion.total
+                  ? "bg-green-500"
+                  : completion.showYellowProgress
+                    ? "bg-yellow-500"
+                    : "bg-zinc-600"
+              }`}
+              style={{
+                width: `${completion.total > 0 ? (completion.fullyTracked / completion.total) * 100 : 0}%`,
+              }}
             />
           </div>
           {lastSaved && (
@@ -1857,6 +1892,56 @@ export default function App() {
               onFieldClick={(c) => updateShot({ x: c.x, y: c.y })}
               onHoverShot={setHoverShot}
             />
+            {activeShot.act !== "TO" && (
+              <div className="flex gap-2 min-w-0 mt-1">
+                <div className="min-w-0 basis-[42%] sm:basis-36 shrink-0 flex flex-col justify-end">
+                  <label className="text-[6px] uppercase tracking-wide text-zinc-500 font-mono mb-0 leading-none">
+                    Shot Type
+                  </label>
+                  <select
+                    value={activeShot.shot_type ?? ""}
+                    onChange={(e) => updateShot({ shot_type: normalizeShotType(e.target.value) })}
+                    aria-label="Shot type"
+                    className="w-full mt-0.5 h-[1.35rem] bg-zinc-900 border border-zinc-800 rounded px-1 text-[10px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    {SHOT_TRACKER_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value || "normal"} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="min-w-0 basis-[42%] sm:basis-36 shrink-0 flex flex-col justify-end">
+                  <label className="text-[6px] uppercase tracking-wide text-zinc-500 font-mono mb-0 leading-none">
+                    One handed?
+                  </label>
+                  <div className="flex gap-px mt-0.5 h-[1.35rem]">
+                    <button
+                      type="button"
+                      onClick={() => updateShot({ one_hand: 1 })}
+                      className={`flex-1 min-w-0 text-[9px] font-mono font-bold rounded-sm ${
+                        activeShot.one_hand === 1
+                          ? "bg-amber-500 text-black"
+                          : "bg-zinc-900 hover:bg-zinc-800 text-zinc-400"
+                      }`}
+                    >
+                      Y
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateShot({ one_hand: 0 })}
+                      className={`flex-1 min-w-0 text-[9px] font-mono font-bold rounded-sm ${
+                        activeShot.one_hand === 0
+                          ? "bg-amber-500 text-black"
+                          : "bg-zinc-900 hover:bg-zinc-800 text-zinc-400"
+                      }`}
+                    >
+                      N
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <div className="shrink-0 w-[13rem] sm:w-[14.5rem] flex flex-col gap-0.5 min-w-0">
             <div className="bg-zinc-950 border border-zinc-800 rounded-sm p-0.5 min-w-0">
@@ -1910,17 +1995,16 @@ export default function App() {
           </div>
         </div>
 
+
+
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
           <div className="sm:col-span-9 min-w-0">
             <div className="text-[8px] uppercase tracking-wider text-zinc-500 font-mono mb-0.5">TIMELINE</div>
             <div className="flex gap-px h-4">
               {shots.map((s, i) => {
-                const complete =
-                  s.x !== null &&
-                  isDefenderChoiceComplete(s) &&
-                  isSecondAssistChoiceComplete(s) &&
-                  s.shot_clock !== null;
-                const partial = s.x !== null;
+                const isTurnover = s.act === "TO";
+                const complete = !isTurnover && isShotManualTrackingComplete(s);
+                const partial = !isTurnover && !complete && hasMeaningfulManualProgress(s);
                 return (
                   <button
                     type="button"
@@ -1928,7 +2012,7 @@ export default function App() {
                     onClick={() => setActiveIdx(i)}
                     className="flex-1 min-w-[3px] rounded-sm transition-all hover:opacity-100"
                     style={{
-                      background: complete ? "#22c55e" : partial ? "#eab308" : "#3f3f46",
+                      background: isTurnover ? "#52525b" : complete ? "#22c55e" : partial ? "#eab308" : "#3f3f46",
                       opacity: i === activeIdx ? 1 : 0.65,
                       outline: i === activeIdx ? "1px solid #fbbf24" : "none",
                     }}

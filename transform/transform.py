@@ -146,7 +146,13 @@ MASTER_COLUMNS = [
     "one_point_shot_flag", "second_assist_flag", "goale_on_pipe_flag",
     "defender_position", "is_hand_inside", "xg_old", "xG", "xSv", "season",
     "quality", "down", "nationality", "PasserShooter",
-    "bounce_shot", "net_x", "net_y", "arm_angle", "arm_angle_degrees",
+    "bounce_shot",
+    "net_x",
+    "net_y",
+    "arm_angle",
+    "arm_angle_degrees",
+    "shot_type",
+    "one_hand",
 ]
 
 

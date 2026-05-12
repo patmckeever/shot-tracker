@@ -6,6 +6,7 @@ import type { Game, Player, Shot } from "../../lib/types";
 import {
   isDefenderChoiceComplete,
   isSecondAssistChoiceComplete,
+  isShotManualTrackingComplete,
   isTrackerNoPlayerId,
 } from "../../lib/types";
 import { mergeShotsWithMetricFlow } from "../../lib/metricFlow";
@@ -103,6 +104,8 @@ const STATS_MASTER_HEADERS = [
   "net_y",
   "arm_angle",
   "arm_angle_degrees",
+  "shot_type",
+  "one_hand",
 ] as const;
 
 export function escapeCsv(val: unknown): string {
@@ -238,6 +241,8 @@ export function buildStatsMasterCsv(
       escapeCsv(s.net_y),
       escapeCsv(s.arm_angle),
       escapeCsv(s.arm_angle_degrees),
+      escapeCsv((s.shot_type ?? "").trim()),
+      escapeCsv(s.one_hand === 1 ? "1" : "0"),
     ];
 
     return cells.join(",");
@@ -267,12 +272,15 @@ export function incompleteShots(shots: Shot[]): { idx: number; missing: string[]
   const issues: { idx: number; missing: string[] }[] = [];
   shots.forEach((s, idx) => {
     if (s.act === "TO") return;
+    if (isShotManualTrackingComplete(s)) return;
     const missing: string[] = [];
     if (s.x === null || s.y === null) missing.push("location");
     if (!isDefenderChoiceComplete(s)) missing.push("closest_defender");
     if (!isSecondAssistChoiceComplete(s)) missing.push("second_assist");
     if (s.shot_clock === null || s.shot_clock === undefined) missing.push("shot_clock");
+    if (s.bounce_shot === null) missing.push("bounce_shot");
     if (s.arm_angle === null || s.arm_angle === undefined) missing.push("arm_angle");
+    if (s.net_x === null) missing.push("net_location");
     if (missing.length > 0) issues.push({ idx, missing });
   });
   return issues;
