@@ -1107,7 +1107,7 @@ function PlayerPicker({
                 : "text-sm font-semibold text-zinc-100"
           }
           subLine={
-            micro ? undefined : (
+            micro || hideLabel ? undefined : (
             <div
               className={`${compact ? "text-[8px] mt-0" : "text-[10px] mt-0.5"} text-zinc-500 font-mono truncate flex items-center gap-1`}
             >
@@ -1141,7 +1141,7 @@ function PlayerPicker({
             >
               {noneLabel}
             </div>
-            {!micro && (
+            {!micro && !hideLabel && (
               <div className={`${compact ? "text-[8px]" : "text-[10px]"} text-zinc-500 font-mono mt-0.5`}>
                 No player
               </div>
@@ -1608,7 +1608,7 @@ export default function App() {
 
   const offensiveRoster = useMemo(() => {
     if (!activeShot) return [];
-    return (rosters[activeShot.team] ?? []).filter((p) => p.player_id !== activeShot.shooter_id);
+    return rosters[activeShot.team] ?? [];
   }, [activeShot, rosters]);
 
   const fieldXgContext = useMemo((): ShotXgContext | undefined => {
