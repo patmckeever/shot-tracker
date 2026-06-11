@@ -1634,6 +1634,23 @@ export default function App() {
     if (next >= 0) setActiveIdx(next);
   }, [shots, activeIdx]);
 
+  /** Normal mode: skip auto-advance when user navigates onto an already-complete shot. */
+  const completeOnNavRef = useRef(false);
+  useEffect(() => {
+    completeOnNavRef.current =
+      isNormalMode && activeShot ? isShotNormalTrackingComplete(activeShot) : false;
+  }, [activeIdx, activeShot?.shot_id, isNormalMode, activeShot]);
+
+  useEffect(() => {
+    if (!isNormalMode || !activeShot || activeShot.act === "TO") return;
+    if (!isShotNormalTrackingComplete(activeShot)) return;
+    if (activeIdx >= shots.length - 1) return;
+    if (completeOnNavRef.current) return;
+
+    completeOnNavRef.current = true;
+    goNext();
+  }, [shots, activeIdx, activeShot, isNormalMode, goNext]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === "INPUT") return;
