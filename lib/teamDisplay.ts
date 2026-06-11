@@ -1,20 +1,25 @@
 /** Champion / PLL squad code → city label for CSV `opposing_team`. */
 
 const TEAM_CODE_ALIASES: Record<string, string> = {
-  ATL: "NY",
-  CHA: "CAR",
-  WAT: "PHI",
+  MD: "WHP",
+  BOS: "CAN",
+  DEN: "OUT",
+  NY: "ATL",
+  PHI: "WAT",
+  CAR: "CHA",
+  CA: "RED",
+  UTA: "ARC",
 };
 
 const CODE_TO_CITY: Record<string, string> = {
-  MD: "Baltimore",
-  BOS: "Boston",
-  DEN: "Denver",
-  NY: "New York",
-  PHI: "Philadelphia",
-  CAR: "Charlotte",
-  CA: "California",
-  UTA: "Utah",
+  OUT: "Denver",
+  WHP: "Baltimore",
+  ARC: "Utah",
+  CAN: "Boston",
+  WAT: "Philadelphia",
+  ATL: "New York",
+  CHA: "Charlotte",
+  RED: "California",
 };
 
 export function opposingTeamCity(teamAbbrev: string | null | undefined): string {

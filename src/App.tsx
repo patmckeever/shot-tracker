@@ -23,24 +23,61 @@ import {
   Circle,
   AlertCircle,
   Target,
-  Clock,
   Users,
 } from "lucide-react";
 import type { Game, Player, Shot, ShotResult, ArmAngleBucket } from "../lib/types";
 import {
   TRACKER_NO_PLAYER_ID,
   hasMeaningfulManualProgress,
+  hasNormalModeProgress,
   isDefenderChoiceComplete,
   isSecondAssistChoiceComplete,
   isShotManualTrackingComplete,
+  isShotNormalTrackingComplete,
   isTrackerNoPlayerId,
 } from "../lib/types";
 import { API, type GameListLeague } from "./lib/api";
 import { Storage } from "./lib/storage";
 import { buildStatsMasterCsv, downloadCsv, incompleteShots } from "./lib/csv";
 import { pllShotDistanceYards } from "../lib/shotGraphicDistance";
+import { computeShotXg, type ShotXgContext } from "../lib/shotXg";
 import { sortShotsChronologically } from "../lib/metricFlow";
 import fieldGraphicUrl from "../field.png";
+
+/** Tracking depth — "normal" asks only the 4 core fields; "advanced" asks everything. */
+type TrackingMode = "normal" | "advanced";
+
+const TRACKING_MODE_KEY = "pll_tracking_mode";
+
+function loadTrackingMode(): TrackingMode {
+  return localStorage.getItem(TRACKING_MODE_KEY) === "advanced" ? "advanced" : "normal";
+}
+
+const SHOT_CLOCK_MIN = 0;
+const SHOT_CLOCK_MAX = 52;
+
+/** Normal-mode tracker + timeline share this centered width (matches field aspect ratio). */
+const TRACKER_CONTENT_CLASS =
+  "w-full max-w-[min(100%,calc(min(calc(100dvh-14rem),88dvh)*2000/2149))]";
+
+/** Whole seconds 0–52 only; empty clears. Returns `undefined` when input should be ignored. */
+function shotClockFromInput(raw: string): number | null | undefined {
+  const t = raw.trim();
+  if (t === "") return null;
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  if (n < SHOT_CLOCK_MIN || n > SHOT_CLOCK_MAX) return undefined;
+  return n;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 /** Trick shot codes for CSV (`shot_type`); empty string exports blank = normal shot. */
 const SHOT_TRACKER_TYPE_OPTIONS = [
@@ -58,25 +95,70 @@ const SHOT_TRACKER_TYPE_OPTIONS = [
 type TeamStyle = { primary: string; accent: string; name: string };
 
 const TEAM_COLORS: Record<string, TeamStyle> = {
-  MD: { primary: "#1a1a1a", accent: "#ffd100", name: "Whipsnakes" },
-  BOS: { primary: "#0b5394", accent: "#e06666", name: "Cannons" },
-  DEN: { primary: "#000000", accent: "#fbbc04", name: "Outlaws" },
-  NY: { primary: "#1d1d5e", accent: "#d4af37", name: "Atlas" },
-  PHI: { primary: "#1b1b1b", accent: "#ff6d00", name: "Waterdogs" },
-  CAR: { primary: "#3d0066", accent: "#8e44ad", name: "Chaos" },
-  CA: { primary: "#0b3d2e", accent: "#c0392b", name: "Redwoods" },
-  UTA: { primary: "#6b1f3d", accent: "#ecf0f1", name: "Archers" },
+  OUT: { primary: "#000000", accent: "#fbbc04", name: "Outlaws" },
+  WHP: { primary: "#14b8a6", accent: "#ccfbf1", name: "Whipsnakes" },
+  ARC: { primary: "#f97316", accent: "#ffedd5", name: "Archers" },
+  CAN: { primary: "#1e3a8a", accent: "#93c5fd", name: "Cannons" },
+  WAT: { primary: "#9333ea", accent: "#e9d5ff", name: "Waterdogs" },
+  ATL: { primary: "#38bdf8", accent: "#0c4a6e", name: "Atlas" },
+  CHA: { primary: "#dc2626", accent: "#fecaca", name: "Chaos" },
+  RED: { primary: "#16a34a", accent: "#bbf7d0", name: "Redwoods" },
 };
 
+/** Legacy Champion / stats codes → current PLL abbreviations */
 const TEAM_CODE_ALIASES: Record<string, keyof typeof TEAM_COLORS | string> = {
-  ATL: "NY",
-  CHA: "CAR",
+  MD: "WHP",
+  BOS: "CAN",
+  DEN: "OUT",
+  NY: "ATL",
+  PHI: "WAT",
+  CAR: "CHA",
+  CA: "RED",
+  UTA: "ARC",
 };
 
 function teamStyle(code: string): TeamStyle {
-  const mapped = TEAM_CODE_ALIASES[code] ?? code;
+  const normalized = code.toUpperCase().trim();
+  const mapped = TEAM_CODE_ALIASES[normalized] ?? normalized;
   const base = TEAM_COLORS[mapped as keyof typeof TEAM_COLORS];
   return base ?? { primary: "#27272a", accent: "#71717a", name: code };
+}
+
+function canonicalTeamCode(code: string): string {
+  const normalized = code.toUpperCase().trim();
+  return TEAM_CODE_ALIASES[normalized] ?? normalized;
+}
+
+function teamLogoUrl(code: string): string {
+  const slug = teamStyle(code).name.toLowerCase();
+  const canonical = canonicalTeamCode(code);
+  if (canonical === "OUT" || canonical === "WHP") {
+    return `https://img.premierlacrosseleague.com/Teams/2026/Logo/${slug}-primary.webp`;
+  }
+  return `https://img.premierlacrosseleague.com/Teams/2024/Logo/2024_${slug}_primary_color.png`;
+}
+
+function TeamLogo({ code, sizeClass = "h-4" }: { code: string; sizeClass?: string }) {
+  const style = teamStyle(code);
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <span className="font-mono text-[9px] text-zinc-400 shrink-0" title={style.name}>
+        {code}
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={teamLogoUrl(code)}
+      alt={style.name}
+      title={style.name}
+      className={`${sizeClass} w-auto max-w-[6rem] object-contain object-left shrink-0`}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,6 +237,10 @@ interface FieldProps {
   onHoverShot: (shot: Shot | null) => void;
   /** Wider area beside a sidebar — drop width cap so the field fills the column */
   besideSidebar?: boolean;
+  /** Normal mode: left-aligned, fills most of the viewport height */
+  normalMode?: boolean;
+  /** Active-shot context for live xG preview while hovering the field */
+  xgContext?: ShotXgContext;
 }
 
 const fieldGridLines = (() => {
@@ -192,7 +278,15 @@ const fieldGridLines = (() => {
   return lines;
 })();
 
-function Field({ shots, activeShotId, onFieldClick, onHoverShot, besideSidebar = false }: FieldProps) {
+function Field({
+  shots,
+  activeShotId,
+  onFieldClick,
+  onHoverShot,
+  besideSidebar = false,
+  normalMode = false,
+  xgContext,
+}: FieldProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hoverCoord, setHoverCoord] = useState<{
     px: number;
@@ -226,17 +320,21 @@ function Field({ shots, activeShotId, onFieldClick, onHoverShot, besideSidebar =
 
   const shotMarkerR = (active: boolean) => (active ? 14 : 9);
 
+  const wideColumn = besideSidebar && !normalMode;
+
   return (
-    <div className={`w-full max-w-full ${besideSidebar ? "" : "flex justify-center"}`}>
-      <div className={`relative ${besideSidebar ? "w-full" : "w-full max-w-full"}`}>
+    <div className={`w-full max-w-full ${wideColumn ? "" : "flex justify-center"}`}>
+      <div className={`relative ${wideColumn ? "w-full" : "w-full max-w-full"}`}>
         <svg
           ref={svgRef}
           viewBox={`0 0 ${FIELD_PIXEL_W} ${FIELD_PIXEL_H}`}
           preserveAspectRatio="xMidYMid meet"
           className={
-            besideSidebar
-              ? "block h-auto w-full max-h-[min(56vh,90dvh)] cursor-crosshair rounded-md"
-              : "mx-auto block h-auto w-full max-h-[min(58vh,88dvh)] max-w-[min(100%,calc(min(58vh,88dvh)*2000/2149))] cursor-crosshair rounded-md"
+            normalMode
+              ? "block h-auto w-full max-h-[min(calc(100dvh-14rem),88dvh)] cursor-crosshair rounded-md"
+              : besideSidebar
+                ? "block h-auto w-full max-h-[min(56vh,90dvh)] cursor-crosshair rounded-md"
+                : "mx-auto block h-auto w-full max-h-[min(58vh,88dvh)] max-w-[min(100%,calc(min(58vh,88dvh)*2000/2149))] cursor-crosshair rounded-md"
           }
           onClick={handleClick}
           onMouseMove={handleMove}
@@ -305,6 +403,7 @@ function Field({ shots, activeShotId, onFieldClick, onHoverShot, besideSidebar =
       </svg>
       {hoverCoord && (() => {
         const { x, y } = hoverCoord.canonical;
+        const xg = xgContext ? computeShotXg(x, y, xgContext) : null;
         return (
           <div className="pointer-events-none absolute top-1 right-1 z-10 whitespace-nowrap rounded-md bg-black px-2.5 py-1.5 font-mono text-[11px] leading-tight shadow-lg ring-1 ring-white/15">
             <span className="text-zinc-100">
@@ -312,6 +411,13 @@ function Field({ shots, activeShotId, onFieldClick, onHoverShot, besideSidebar =
             </span>{" "}
             <span className="text-zinc-500">·</span>{" "}
             <span className="text-amber-400">{pllShotDistanceYards(x, y).toFixed(1)}yd</span>
+            {xg !== null && (
+              <>
+                {" "}
+                <span className="text-zinc-500">·</span>{" "}
+                <span className="text-emerald-400">{xg.toFixed(2)} xG</span>
+              </>
+            )}
           </div>
         );
       })()}
@@ -857,6 +963,8 @@ interface PlayerPickerProps {
   compact?: boolean;
   /** Minimal trigger + narrow list (single tracker row) */
   micro?: boolean;
+  /** Hide upper label; show `label` as in-control placeholder until a choice is made */
+  hideLabel?: boolean;
 }
 
 function PlayerThumb({
@@ -946,9 +1054,23 @@ function PlayerPicker({
   disabledHint = "",
   compact = false,
   micro = false,
+  hideLabel = false,
 }: PlayerPickerProps) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open]);
 
   const sortedRoster = useMemo(() => sortPlayersByPositionOrder(roster, positionOrder), [roster, positionOrder]);
 
@@ -987,10 +1109,12 @@ function PlayerPicker({
           subLine={
             micro ? undefined : (
             <div
-              className={`${compact ? "text-[8px] mt-0" : "text-[10px] mt-0.5"} text-zinc-500 font-mono truncate`}
+              className={`${compact ? "text-[8px] mt-0" : "text-[10px] mt-0.5"} text-zinc-500 font-mono truncate flex items-center gap-1`}
             >
-              {selectedPlayer.position} · {selectedPlayer.team}
-              {selectedPlayer.handedness ? ` · ${selectedPlayer.handedness}H` : ""}
+              <span>{selectedPlayer.position}</span>
+              <span>·</span>
+              <TeamLogo code={selectedPlayer.team} sizeClass={compact ? "h-2.5" : "h-3"} />
+              {selectedPlayer.handedness ? <span>· {selectedPlayer.handedness}H</span> : null}
             </div>
             )
           }
@@ -1026,6 +1150,17 @@ function PlayerPicker({
         </div>
       );
     }
+    if (hideLabel) {
+      return (
+        <div
+          className={`text-zinc-500 font-mono truncate ${
+            micro ? "text-[8px] py-0.5 leading-tight" : compact ? "text-[11px] py-1" : "text-sm py-2"
+          } px-0.5`}
+        >
+          {label}
+        </div>
+      );
+    }
     return (
       <div
         className={`text-amber-500/95 ${micro ? "text-[8px] py-0.5 leading-tight" : compact ? "text-[11px] py-1" : "text-sm py-2"} px-0.5 font-medium`}
@@ -1038,12 +1173,14 @@ function PlayerPicker({
   };
 
   return (
-    <div className={`relative min-w-0 ${disabled ? "opacity-60" : ""}`}>
-      <label
-        className={`${micro ? "text-[7px] mb-px leading-none" : compact ? "text-[8px] mb-0.5" : "text-[10px] mb-1"} uppercase tracking-wide text-zinc-500 font-mono flex items-center gap-0.5`}
-      >
-        <Icon size={micro ? 7 : compact ? 8 : 10} /> {label}
-      </label>
+    <div ref={rootRef} className={`relative min-w-0 ${disabled ? "opacity-60" : ""}`}>
+      {!hideLabel && (
+        <label
+          className={`${micro ? "text-[7px] mb-px leading-none" : compact ? "text-[8px] mb-0.5" : "text-[10px] mb-1"} uppercase tracking-wide text-zinc-500 font-mono flex items-center gap-0.5`}
+        >
+          <Icon size={micro ? 7 : compact ? 8 : 10} /> {label}
+        </label>
+      )}
       {disabled && disabledHint ? (
         <div className={`${micro ? "text-[6px] leading-tight" : compact ? "text-[8px]" : "text-[10px]"} text-zinc-600 font-mono mb-0.5 line-clamp-2`}>
           {disabledHint}
@@ -1159,41 +1296,70 @@ function ResultBadge({ result, compact = false }: { result: ShotResult; compact?
   );
 }
 
-function ShotChecklist({ shot, compact = false }: { shot: Shot; compact?: boolean }) {
-  const items = [
-    ...(shot.act === "SH"
+function ShotChecklist({
+  shot,
+  compact = false,
+  mode = "advanced",
+}: {
+  shot: Shot;
+  compact?: boolean;
+  mode?: TrackingMode;
+}) {
+  const items =
+    mode === "normal"
       ? [
-          { label: "Shot hand", done: true },
-          { label: "One hand", done: true },
+          { label: "Location", done: shot.x !== null },
+          { label: "Defender", done: isDefenderChoiceComplete(shot) },
+          ...(shot.first_assist
+            ? [{ label: "2nd ast", done: isSecondAssistChoiceComplete(shot) }]
+            : []),
+          { label: "Clock", done: shot.shot_clock !== null },
         ]
-      : []),
-    { label: "Location", done: shot.x !== null },
-    { label: "Defender", done: isDefenderChoiceComplete(shot) },
-    ...(shot.first_assist
-      ? [{ label: "2nd ast", done: isSecondAssistChoiceComplete(shot) }]
-      : []),
-    { label: "Clock", done: shot.shot_clock !== null },
-    { label: "Bounce", done: shot.bounce_shot !== null },
-    { label: "Arm", done: shot.arm_angle !== null },
-    { label: (shot.result ?? "MISS") === "MISS" ? "Miss" : "Net Location", done: shot.net_x !== null },
-  ];
+      : [
+          ...(shot.act === "SH"
+            ? [
+                { label: "Shot hand", done: true },
+                { label: "One hand", done: true },
+              ]
+            : []),
+          { label: "Location", done: shot.x !== null },
+          { label: "Defender", done: isDefenderChoiceComplete(shot) },
+          ...(shot.first_assist
+            ? [{ label: "2nd ast", done: isSecondAssistChoiceComplete(shot) }]
+            : []),
+          { label: "Clock", done: shot.shot_clock !== null },
+          { label: "Bounce", done: shot.bounce_shot !== null },
+          { label: "Arm", done: shot.arm_angle !== null },
+          { label: (shot.result ?? "MISS") === "MISS" ? "Miss" : "Net Location", done: shot.net_x !== null },
+        ];
   return (
-    <div className={`bg-zinc-950 border border-zinc-800 rounded h-full ${compact ? "p-1.5" : "p-2"}`}>
-      <div className={`uppercase tracking-wider text-zinc-500 font-mono mb-1 ${compact ? "text-[8px]" : "text-[10px]"}`}>
+    <div
+      className={`bg-zinc-950 border border-zinc-800 rounded flex flex-row items-center flex-nowrap gap-x-2 overflow-x-auto min-w-0 ${
+        compact ? "px-1.5 py-1 gap-x-1.5" : "p-2 gap-x-2.5"
+      }`}
+    >
+      <span
+        className={`uppercase tracking-wider text-zinc-500 font-mono shrink-0 ${
+          compact ? "text-[8px]" : "text-[10px]"
+        }`}
+      >
         STATUS
-      </div>
-      <div className={`grid grid-cols-2 ${compact ? "gap-x-1 gap-y-0.5" : "gap-x-2 gap-y-1"}`}>
-        {items.map((it) => (
-          <div key={it.label} className={`flex items-center gap-0.5 ${compact ? "text-[8px]" : "text-[10px]"}`}>
-            {it.done ? (
-              <Check size={compact ? 8 : 10} className="text-green-500 shrink-0" />
-            ) : (
-              <Circle size={compact ? 8 : 10} className="text-zinc-700 shrink-0" />
-            )}
-            <span className={it.done ? "text-zinc-300" : "text-zinc-500"}>{it.label}</span>
-          </div>
-        ))}
-      </div>
+      </span>
+      {items.map((it) => (
+        <div
+          key={it.label}
+          className={`flex items-center gap-0.5 shrink-0 whitespace-nowrap ${
+            compact ? "text-[8px]" : "text-[10px]"
+          }`}
+        >
+          {it.done ? (
+            <Check size={compact ? 8 : 10} className="text-green-500 shrink-0" />
+          ) : (
+            <Circle size={compact ? 8 : 10} className="text-zinc-700 shrink-0" />
+          )}
+          <span className={it.done ? "text-zinc-300" : "text-zinc-500"}>{it.label}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1271,6 +1437,19 @@ export default function App() {
   const [pickerSeason, setPickerSeason] = useState(() => new Date().getFullYear());
   const [pickerLeague, setPickerLeague] = useState<GameListLeague>("pll_regular");
   const [pickerLoading, setPickerLoading] = useState(false);
+  const [trackingMode, setTrackingMode] = useState<TrackingMode>(loadTrackingMode);
+  const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
+  const [timerFrozenAt, setTimerFrozenAt] = useState<number | null>(null);
+  const [timerNow, setTimerNow] = useState(() => Date.now());
+
+  const setMode = useCallback((m: TrackingMode) => {
+    setTrackingMode(m);
+    localStorage.setItem(TRACKING_MODE_KEY, m);
+  }, []);
+
+  const isNormalMode = trackingMode === "normal";
+  const shotComplete = isNormalMode ? isShotNormalTrackingComplete : isShotManualTrackingComplete;
+  const shotProgress = isNormalMode ? hasNormalModeProgress : hasMeaningfulManualProgress;
 
   const seasonYearOptions = useMemo(() => pickerSeasonYears(), []);
 
@@ -1432,6 +1611,15 @@ export default function App() {
     return (rosters[activeShot.team] ?? []).filter((p) => p.player_id !== activeShot.shooter_id);
   }, [activeShot, rosters]);
 
+  const fieldXgContext = useMemo((): ShotXgContext | undefined => {
+    if (!activeShot) return undefined;
+    return {
+      shotHand: activeShot.shooter_dominant_hand,
+      firstAssistFlag: activeShot.first_assist_flag ?? 0,
+      secondAssistFlag: (activeShot.second_assist ?? "").trim() ? 1 : 0,
+    };
+  }, [activeShot]);
+
   const updateShot = useCallback(
     (patch: Partial<Shot>) => {
       setShots((prev) => prev.map((s, i) => (i === activeIdx ? { ...s, ...patch } : s)));
@@ -1461,16 +1649,40 @@ export default function App() {
     const tracked = shots.filter((s) => s.act !== "TO");
     const total = tracked.length;
     const marked = tracked.filter((s) => s.x !== null).length;
-    const fullyTracked = tracked.filter(isShotManualTrackingComplete).length;
+    const fullyTracked = tracked.filter(shotComplete).length;
     const showYellowProgress =
       total > 0 &&
       fullyTracked < total &&
-      tracked.some((s) => !isShotManualTrackingComplete(s) && hasMeaningfulManualProgress(s));
+      tracked.some((s) => !shotComplete(s) && shotProgress(s));
     return { total, marked, fullyTracked, showYellowProgress };
-  }, [shots]);
+  }, [shots, shotComplete, shotProgress]);
+
+  const shotCompletionPct =
+    completion.total > 0 ? Math.round((completion.fullyTracked / completion.total) * 100) : 0;
+
+  useEffect(() => {
+    setSessionStartedAt(Date.now());
+    setTimerFrozenAt(null);
+    setTimerNow(Date.now());
+  }, [gameId]);
+
+  useEffect(() => {
+    if (timerFrozenAt !== null) return;
+    const tracked = shots.filter((s) => s.act !== "TO");
+    if (tracked.length > 0 && tracked.every(shotComplete)) {
+      setTimerFrozenAt(Date.now());
+      return;
+    }
+    const id = window.setInterval(() => setTimerNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [shots, shotComplete, timerFrozenAt]);
+
+  const elapsedMs = (timerFrozenAt ?? timerNow) - sessionStartedAt;
 
   const exportCSV = () => {
-    const issues = incompleteShots(shots);
+    const issues = isNormalMode
+      ? shots.filter((s) => s.act !== "TO" && !isShotNormalTrackingComplete(s))
+      : incompleteShots(shots);
     if (issues.length > 0) {
       const proceed = confirm(
         `${issues.length} shot${issues.length === 1 ? " is" : "s are"} incomplete. Export anyway?`,
@@ -1480,13 +1692,6 @@ export default function App() {
     if (!game) return;
     downloadCsv(`shots_${gameId}.csv`, buildStatsMasterCsv(game, shots, rosters, metricFlow));
   };
-
-  const gameTitle =
-    game != null
-      ? `Week ${game.week} · Game ${game.game_number} — ${game.away_team} @ ${game.home_team}`
-      : gameId
-        ? `Match ${gameId}`
-        : "";
 
   // ── Game picker ─────────────────────────────────────────────────────────
   if (!gameId) {
@@ -1585,8 +1790,21 @@ export default function App() {
                       <div className="text-xs font-mono text-zinc-500">
                         #{g.game_number} · {g.date ?? "—"} · {roundLabel} {g.week ?? "?"}
                       </div>
-                      <div className="text-sm font-semibold mt-0.5">
-                        {roundLabel} {g.week ?? "?"} — {g.away ?? "?"} @ {g.home ?? "?"}
+                      <div className="text-sm font-semibold mt-0.5 flex items-center gap-2 flex-wrap">
+                        <span>
+                          {roundLabel} {g.week ?? "?"} —
+                        </span>
+                        {g.away && g.home ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <TeamLogo code={g.away} sizeClass="h-4" />
+                            <span className="text-zinc-500 font-normal">@</span>
+                            <TeamLogo code={g.home} sizeClass="h-4" />
+                          </span>
+                        ) : (
+                          <span>
+                            {g.away ?? "?"} @ {g.home ?? "?"}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <ChevronRight size={16} className="text-zinc-600 group-hover:text-amber-500 shrink-0" />
@@ -1662,134 +1880,151 @@ export default function App() {
         fontFamily: "ui-sans-serif, system-ui, sans-serif",
       }}
     >
-      <div className="border-b border-zinc-900 pl-0 pr-2 py-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 bg-zinc-950/50">
-        <div className="flex items-center gap-2 min-w-0">
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="text-[9px] text-zinc-500 hover:text-zinc-300 font-mono shrink-0"
-          >
-            ← GAMES
-          </button>
-          <div className="text-[9px] font-mono text-zinc-400 truncate">{gameTitle}</div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          <div className="text-[8px] font-mono text-zinc-500 whitespace-nowrap">
-            {completion.marked}/{completion.total} · {completion.fullyTracked}/{completion.total} done
-          </div>
-          <div className="w-24 sm:w-32 h-0.5 bg-zinc-900 rounded overflow-hidden shrink-0">
-            <div
-              className={`h-full ${
-                completion.total > 0 && completion.fullyTracked === completion.total
-                  ? "bg-green-500"
-                  : completion.showYellowProgress
-                    ? "bg-yellow-500"
-                    : "bg-zinc-600"
-              }`}
-              style={{
-                width: `${completion.total > 0 ? (completion.fullyTracked / completion.total) * 100 : 0}%`,
-              }}
-            />
-          </div>
-          {lastSaved && (
-            <div className="text-[8px] font-mono text-zinc-600 whitespace-nowrap">
-              {lastSaved.toLocaleTimeString()}
+      <div className="border-b border-zinc-900 bg-zinc-950/50">
+        <div className="flex justify-center px-4 py-1.5">
+          <div className={`${TRACKER_CONTENT_CLASS} flex items-center justify-between gap-3`}>
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <button
+                type="button"
+                onClick={() => navigate("/")}
+                className="text-[9px] text-zinc-500 hover:text-zinc-300 font-mono shrink-0"
+              >
+                ← GAMES
+              </button>
+              {game ? (
+                <div className="flex items-center gap-2 min-w-0 text-[9px] font-mono text-zinc-300 truncate">
+                  <span className="text-zinc-500 shrink-0">Wk {game.week}</span>
+                  <span className="text-zinc-600 shrink-0">·</span>
+                  <span className="shrink-0">#{game.game_number}</span>
+                  <span className="text-zinc-600 shrink-0">·</span>
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    <TeamLogo code={game.away_team} sizeClass="h-6" />
+                    <span className="text-zinc-600">@</span>
+                    <TeamLogo code={game.home_team} sizeClass="h-6" />
+                  </span>
+                </div>
+              ) : (
+                <span className="text-[9px] font-mono text-zinc-400 truncate">Match {gameId}</span>
+              )}
             </div>
-          )}
-          <button
-            type="button"
-            onClick={exportCSV}
-            className="text-[9px] bg-amber-500 hover:bg-amber-400 text-black font-semibold px-2 py-1 rounded flex items-center gap-1 shrink-0"
-          >
-            <Download size={10} /> CSV
-          </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <div
+                className="flex rounded border border-zinc-700 overflow-hidden text-[9px] font-mono font-bold"
+                role="group"
+                aria-label="Tracking mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => setMode("normal")}
+                  className={`px-2 py-0.5 transition-colors border-r border-zinc-700 ${
+                    isNormalMode
+                      ? "bg-amber-600/25 text-amber-400"
+                      : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"
+                  }`}
+                >
+                  NORMAL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("advanced")}
+                  className={`px-2 py-0.5 transition-colors ${
+                    !isNormalMode
+                      ? "bg-amber-600/25 text-amber-400"
+                      : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"
+                  }`}
+                >
+                  ADVANCED
+                </button>
+              </div>
+              <div
+                className={`text-[10px] font-mono whitespace-nowrap tabular-nums ${
+                  timerFrozenAt !== null ? "text-green-500" : "text-zinc-300"
+                }`}
+                title={timerFrozenAt !== null ? "Session complete" : "Elapsed time"}
+              >
+                {formatElapsed(elapsedMs)}
+              </div>
+              <button
+                type="button"
+                onClick={exportCSV}
+                className="text-[9px] bg-amber-500 hover:bg-amber-400 text-black font-semibold px-2 py-1 rounded flex items-center gap-1"
+              >
+                <Download size={10} /> CSV
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div
-        className="border-b border-zinc-900 bg-gradient-to-r"
-        style={{
-          backgroundImage: `linear-gradient(90deg, ${offTeamColor.primary}40 0%, transparent 40%, transparent 60%, ${defTeamColor.primary}40 100%)`,
-        }}
-      >
-        <div className="pl-0 pr-2 py-1.5 flex items-center gap-1.5 min-h-0">
-          <button
-            type="button"
-            onClick={goPrev}
-            disabled={activeIdx === 0}
-            className="p-1 bg-zinc-900 rounded hover:bg-zinc-800 disabled:opacity-30 shrink-0"
-          >
-            <ChevronLeft size={14} />
-          </button>
-
-          <div className="flex-1 flex items-center gap-2 min-w-0 overflow-x-auto">
-            <div className="text-[8px] font-mono text-zinc-500 shrink-0">
-              {activeIdx + 1}/{shots.length}
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <div className="text-[9px] font-mono px-1 py-0.5 bg-zinc-900 rounded text-zinc-300 whitespace-nowrap">
-                {formatQtr(activeShot.qtr)} {displayGameClockElapsedFrom12(activeShot.game_clock, activeShot.qtr)}
-              </div>
-              <ResultBadge result={activeResult} compact />
-            </div>
-
-            <div className="flex items-center gap-2 min-w-0">
-              <PlayerAvatarNameBlock
-                player={shooterPlayer}
-                fallbackName={activeShot.player}
-                accentColor={offTeamColor.accent}
-                avatarClass="w-7 h-7"
-                avatarTextClass="text-xs"
-                nameClassName="text-[11px] font-bold text-zinc-100 leading-tight"
-                subLine={
-                  <div className="text-[8px] font-mono text-zinc-500 flex items-center gap-1 flex-wrap mt-px">
-                    <span>
-                      {activeShot.team} · {activeShot.act} ·{" "}
-                      {shotHand ? (
-                        <span
-                          className="font-bold px-0.5 rounded"
-                          style={{
-                            background: shotHand === "L" ? "#7c3aed" : "#0284c7",
-                            color: "#fff",
-                          }}
-                        >
-                          {shotHand}H
-                        </span>
-                      ) : (
-                        <span className="text-zinc-500 font-mono">—</span>
-                      )}
-                    </span>
-                  </div>
-                }
-              />
-            </div>
-
-            {activeShot.first_assist && (
-              <PlayerAvatarNameBlock
-                player={assistPlayer}
-                fallbackName={activeShot.first_assist}
-                accentColor={offTeamColor.accent}
-                avatarClass="w-6 h-6"
-                avatarTextClass="text-[10px]"
-                nameClassName="text-[10px] font-semibold text-zinc-300 leading-tight"
-                subLine={<div className="text-[7px] font-mono text-zinc-500 mt-px">1ST AST</div>}
-              />
-            )}
-          </div>
-
-          <div className="flex gap-1 shrink-0">
+      <div className="border-b border-zinc-900">
+        <div className="flex justify-center px-4">
+          <div className={`${TRACKER_CONTENT_CLASS} py-1.5 flex items-center gap-1.5 min-h-0`}>
             <button
               type="button"
-              onClick={goNextUnmarked}
-              className="px-1.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-[8px] font-mono text-zinc-400 rounded whitespace-nowrap"
+              onClick={goPrev}
+              disabled={activeIdx === 0}
+              className="p-1 bg-zinc-900 rounded hover:bg-zinc-800 disabled:opacity-30 shrink-0"
             >
-              NXT (N)
+              <ChevronLeft size={14} />
             </button>
+
+            <div className="flex-1 flex items-center gap-2 min-w-0">
+              <div className="text-[8px] font-mono text-zinc-500 shrink-0">
+                {activeIdx + 1}/{shots.length}
+              </div>
+              <TeamLogo code={activeShot.team} sizeClass="h-6" />
+              <div className="flex flex-col items-center shrink-0 gap-0.5">
+                <div className="text-[9px] font-mono px-1 py-0.5 bg-zinc-900 rounded text-zinc-300 whitespace-nowrap leading-tight">
+                  {formatQtr(activeShot.qtr)}{" "}
+                  {displayGameClockElapsedFrom12(activeShot.game_clock, activeShot.qtr)}
+                </div>
+                <ResultBadge result={activeResult} compact />
+              </div>
+
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                {shooterPlayer ? (
+                  <PlayerThumb
+                    p={shooterPlayer}
+                    accentColor={offTeamColor.accent}
+                    sizeClass="w-7 h-7"
+                    textClass="text-xs"
+                  />
+                ) : (
+                  <div className="w-7 h-7 shrink-0 rounded bg-zinc-800 flex items-center justify-center font-mono font-bold text-zinc-500 text-xs">
+                    —
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex items-baseline gap-1 min-w-0 leading-tight">
+                    <span className="font-mono text-[10px] text-zinc-400 shrink-0">
+                      #{shooterPlayer?.number ?? "—"}
+                    </span>
+                    <span className="text-[11px] font-bold text-zinc-100 truncate">
+                      {shooterPlayer?.name?.trim() || activeShot.player}
+                    </span>
+                    {shotHand ? (
+                      <span className="text-[8px] font-mono text-zinc-500 shrink-0">({shotHand}H)</span>
+                    ) : null}
+                  </div>
+                  <div className="text-[8px] font-mono text-zinc-500 truncate mt-px leading-tight">
+                    {activeShot.first_assist ? (
+                      <>
+                        Assisted by #{assistPlayer?.number ?? "—"}{" "}
+                        {assistPlayer?.name?.trim() || activeShot.first_assist}
+                      </>
+                    ) : (
+                      "Unassisted"
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={goNext}
               disabled={activeIdx === shots.length - 1}
-              className="p-1 bg-zinc-900 rounded hover:bg-zinc-800 disabled:opacity-30"
+              className="p-1 bg-zinc-900 rounded hover:bg-zinc-800 disabled:opacity-30 shrink-0"
             >
               <ChevronRight size={14} />
             </button>
@@ -1797,10 +2032,73 @@ export default function App() {
         </div>
       </div>
 
-      <div className="pt-2 pb-2 pl-0 pr-2 space-y-2">
+      <div className="pt-2 pb-2 px-4 space-y-2">
+        {isNormalMode ? (
+          <div className="flex justify-center w-full min-w-0">
+            <div className={`${TRACKER_CONTENT_CLASS} flex flex-col gap-2`}>
+              <div className="grid w-full min-w-0 grid-cols-[1fr_1fr_6.5rem] gap-2 items-end">
+                <PlayerPicker
+                  compact
+                  hideLabel
+                  label="Closest Defender"
+                  roster={defensiveRoster}
+                  positionOrder={DEFENDER_POSITION_ORDER}
+                  noneLabel="None"
+                  selectedId={activeShot.closest_defender_id}
+                  onSelect={(id) => setShotPlayerField("closest_defender_id", "closest_defender", id)}
+                  icon={Target}
+                  accentColor={defTeamColor.accent}
+                />
+                <PlayerPicker
+                  compact
+                  hideLabel
+                  label="2nd Assist"
+                  roster={offensiveRoster}
+                  positionOrder={SECOND_ASSIST_POSITION_ORDER}
+                  noneLabel="None"
+                  selectedId={activeShot.second_assist_id}
+                  onSelect={(id) => setShotPlayerField("second_assist_id", "second_assist", id)}
+                  icon={Users}
+                  accentColor={offTeamColor.accent}
+                  disabled={!activeShot.first_assist}
+                />
+                <div className="min-w-0 flex flex-col justify-end">
+                  <div className="w-full bg-zinc-900 border border-zinc-800 rounded flex items-center px-1.5 py-0.5">
+                    <input
+                      type="number"
+                      min={SHOT_CLOCK_MIN}
+                      max={SHOT_CLOCK_MAX}
+                      step={1}
+                      inputMode="numeric"
+                      value={activeShot.shot_clock ?? ""}
+                      onChange={(e) => {
+                        const next = shotClockFromInput(e.target.value);
+                        if (next === undefined) return;
+                        updateShot({ shot_clock: next });
+                      }}
+                      placeholder="Shot Clock"
+                      className="w-full h-6 bg-transparent border-0 px-0 text-[10px] text-center font-mono text-zinc-100 placeholder:text-zinc-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <Field
+                normalMode
+                shots={shots}
+                activeShotId={activeShot.shot_id}
+                onFieldClick={(c) => updateShot({ x: c.x, y: c.y })}
+                onHoverShot={setHoverShot}
+                xgContext={fieldXgContext}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
         <div className="grid w-full min-w-0 grid-cols-[37.5%_37.5%_25%] gap-x-0.5 gap-y-0 items-end">
           <PlayerPicker
             micro
+            hideLabel
             label="Closest Defender"
             roster={defensiveRoster}
             positionOrder={DEFENDER_POSITION_ORDER}
@@ -1813,6 +2111,7 @@ export default function App() {
 
           <PlayerPicker
             micro
+            hideLabel
             label="2nd Assist"
             roster={offensiveRoster}
             positionOrder={SECOND_ASSIST_POSITION_ORDER}
@@ -1822,26 +2121,24 @@ export default function App() {
             icon={Users}
             accentColor={offTeamColor.accent}
             disabled={!activeShot.first_assist}
-            disabledHint="No 1st ast"
           />
 
           <div className="min-w-0 flex flex-row gap-px h-full">
             <div className="min-w-0 basis-1/2 flex flex-col justify-end">
-              <label className="text-[6px] uppercase tracking-wide text-zinc-500 font-mono mb-0 leading-none">
-                Shot Clock
-              </label>
               <input
                 type="number"
-                min={0}
-                max={60}
+                min={SHOT_CLOCK_MIN}
+                max={SHOT_CLOCK_MAX}
+                step={1}
+                inputMode="numeric"
                 value={activeShot.shot_clock ?? ""}
-                onChange={(e) =>
-                  updateShot({
-                    shot_clock: e.target.value === "" ? null : +e.target.value,
-                  })
-                }
-                placeholder="s"
-                className="w-full h-[1.35rem] mt-0.5 bg-zinc-900 border border-zinc-800 rounded px-0.5 text-[10px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500"
+                onChange={(e) => {
+                  const next = shotClockFromInput(e.target.value);
+                  if (next === undefined) return;
+                  updateShot({ shot_clock: next });
+                }}
+                placeholder="Shot Clock"
+                className="w-full h-[1.35rem] bg-zinc-900 border border-zinc-800 rounded px-0.5 text-[10px] font-mono text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-amber-500"
               />
             </div>
             <div className="min-w-0 basis-1/2 flex flex-col justify-end">
@@ -1891,6 +2188,7 @@ export default function App() {
               activeShotId={activeShot.shot_id}
               onFieldClick={(c) => updateShot({ x: c.x, y: c.y })}
               onHoverShot={setHoverShot}
+              xgContext={fieldXgContext}
             />
             {activeShot.act !== "TO" && (
               <div className="flex gap-2 min-w-0 mt-1">
@@ -1994,35 +2292,42 @@ export default function App() {
             </div>
           </div>
         </div>
+          </>
+        )}
 
-
-
-        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-          <div className="sm:col-span-9 min-w-0">
-            <div className="text-[8px] uppercase tracking-wider text-zinc-500 font-mono mb-0.5">TIMELINE</div>
-            <div className="flex gap-px h-4">
-              {shots.map((s, i) => {
-                const isTurnover = s.act === "TO";
-                const complete = !isTurnover && isShotManualTrackingComplete(s);
-                const partial = !isTurnover && !complete && hasMeaningfulManualProgress(s);
-                return (
-                  <button
-                    type="button"
-                    key={s.shot_id}
-                    onClick={() => setActiveIdx(i)}
-                    className="flex-1 min-w-[3px] rounded-sm transition-all hover:opacity-100"
-                    style={{
-                      background: isTurnover ? "#52525b" : complete ? "#22c55e" : partial ? "#eab308" : "#3f3f46",
-                      opacity: i === activeIdx ? 1 : 0.65,
-                      outline: i === activeIdx ? "1px solid #fbbf24" : "none",
-                    }}
-                    title={`Shot ${i + 1}: #${getPlayerById(s.shooter_id)?.number ?? getPlayerByName(s.player)?.number ?? "—"} ${s.player}`}
-                  />
-                );
-              })}
+        <div className="flex justify-center w-full min-w-0">
+          <div className={`${TRACKER_CONTENT_CLASS} flex flex-col gap-2`}>
+            <div className="flex items-center gap-2">
+              <div className="shrink-0 text-[9px] font-mono text-zinc-400 tabular-nums leading-tight">
+                <div>{shotCompletionPct}% done</div>
+                <div className="text-zinc-500">
+                  {completion.fullyTracked}/{completion.total}
+                </div>
+              </div>
+              <div className="flex flex-1 min-w-0 gap-px h-4">
+                {shots.map((s, i) => {
+                  const isTurnover = s.act === "TO";
+                  const complete = !isTurnover && shotComplete(s);
+                  const partial = !isTurnover && !complete && shotProgress(s);
+                  return (
+                    <button
+                      type="button"
+                      key={s.shot_id}
+                      onClick={() => setActiveIdx(i)}
+                      className="flex-1 min-w-[3px] rounded-sm transition-all hover:opacity-100"
+                      style={{
+                        background: isTurnover ? "#52525b" : complete ? "#22c55e" : partial ? "#eab308" : "#3f3f46",
+                        opacity: i === activeIdx ? 1 : 0.65,
+                        outline: i === activeIdx ? "1px solid #fbbf24" : "none",
+                      }}
+                      title={`Shot ${i + 1}: #${getPlayerById(s.shooter_id)?.number ?? getPlayerByName(s.player)?.number ?? "—"} ${s.player}`}
+                    />
+                  );
+                })}
+              </div>
             </div>
             {hoverShot && hoverShot.shot_id !== activeShot.shot_id && (
-              <div className="mt-1.5 text-[9px] font-mono text-zinc-400 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 flex flex-col gap-1">
+              <div className="text-[9px] font-mono text-zinc-400 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 flex flex-col gap-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-amber-400 font-bold shrink-0">{hoverShot.result}</span>
                   <PlayerAvatarNameBlock
@@ -2034,7 +2339,8 @@ export default function App() {
                     nameClassName="text-[10px] font-mono text-zinc-300"
                     subLine={
                       <span className="text-zinc-500">
-                        {formatQtr(hoverShot.qtr)} {displayGameClockElapsedFrom12(hoverShot.game_clock, hoverShot.qtr)}
+                        {formatQtr(hoverShot.qtr)}{" "}
+                        {displayGameClockElapsedFrom12(hoverShot.game_clock, hoverShot.qtr)}
                       </span>
                     }
                   />
@@ -2058,10 +2364,7 @@ export default function App() {
                 )}
               </div>
             )}
-          </div>
-
-          <div className="sm:col-span-3 min-w-0">
-            <ShotChecklist shot={activeShot} compact />
+            <ShotChecklist shot={activeShot} compact mode={trackingMode} />
           </div>
         </div>
       </div>

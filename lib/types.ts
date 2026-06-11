@@ -180,6 +180,38 @@ export function isShotManualTrackingComplete(s: Shot): boolean {
   return true;
 }
 
+/** Normal mode: count of the 4 tracker inputs answered (0–4). */
+export function countNormalModeInputs(s: Shot): number {
+  if (s.act === "TO") return 0;
+  let n = 0;
+  if (s.x !== null) n++;
+  if (isDefenderChoiceComplete(s)) n++;
+  if (isSecondAssistChoiceComplete(s)) n++;
+  if (s.shot_clock !== null) n++;
+  return n;
+}
+
+/** Normal mode: complete once location, defender, 2nd assist (when applicable), and shot clock are answered. */
+export function isShotNormalTrackingComplete(s: Shot): boolean {
+  if (s.act === "TO") return false;
+  if (s.x === null || s.y === null) return false;
+  if (!isDefenderChoiceComplete(s)) return false;
+  if (!isSecondAssistChoiceComplete(s)) return false;
+  if (s.shot_clock === null) return false;
+  return true;
+}
+
+/** Normal-mode yellow state: any of the four normal-mode fields filled. */
+export function hasNormalModeProgress(s: Shot): boolean {
+  if (s.act === "TO") return false;
+  return (
+    s.x !== null ||
+    s.shot_clock !== null ||
+    isDefenderChoiceComplete(s) ||
+    (s.first_assist ? isSecondAssistChoiceComplete(s) : false)
+  );
+}
+
 /** True if any manual tracker fields that drive "meaningful progress" / yellow state are filled (excludes shot_type + one_hand). */
 export function hasMeaningfulManualProgress(s: Shot): boolean {
   if (s.act === "TO") return false;
