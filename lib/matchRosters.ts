@@ -3,6 +3,7 @@
  */
 
 import type { Player } from "./types.js";
+import { isWllTeamCode, wllHeadshotUrl } from "./wllRoster.js";
 
 export interface ChampionPersonRaw {
   personId?: number;
@@ -31,20 +32,26 @@ function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z]/g, "");
 }
 
-export function championPersonToPlayer(p: ChampionPersonRaw, teamCode: string): Player | null {
+export function championPersonToPlayer(
+  p: ChampionPersonRaw,
+  teamCode: string,
+  season?: number,
+): Player | null {
   const id = p.personId != null ? String(p.personId) : "";
   const name = (p.fullname ?? p.displayName ?? "").trim();
   if (!id || !name) return null;
   const pos = p.positions?.selected?.code ?? p.positions?.selected?.name ?? "";
+  const team = teamCode.toUpperCase();
   return {
     player_id: id,
     name,
     number: typeof p.jerseyNumber === "number" ? p.jerseyNumber : 0,
-    team: teamCode,
+    team,
     position: typeof pos === "string" ? pos : "",
     handedness: null,
     country: null,
-    headshot_url: null,
+    headshot_url:
+      isWllTeamCode(team) && season != null ? wllHeadshotUrl(name, season) : null,
   };
 }
 
@@ -55,16 +62,17 @@ export function rosterPlayersFromChampionPersons(
   persons: ChampionMatchPersonsResponse,
   fallbackHomeCode: string,
   fallbackAwayCode: string,
+  season?: number,
 ): { home: Player[]; away: Player[] } {
   const hCode = (persons.squads?.home?.code ?? fallbackHomeCode).toUpperCase();
   const aCode = (persons.squads?.away?.code ?? fallbackAwayCode).toUpperCase();
 
   const home = (persons.squads?.home?.players ?? [])
-    .map((p) => championPersonToPlayer(p, hCode))
+    .map((p) => championPersonToPlayer(p, hCode, season))
     .filter((x): x is Player => x !== null);
 
   const away = (persons.squads?.away?.players ?? [])
-    .map((p) => championPersonToPlayer(p, aCode))
+    .map((p) => championPersonToPlayer(p, aCode, season))
     .filter((x): x is Player => x !== null);
 
   return { home, away };

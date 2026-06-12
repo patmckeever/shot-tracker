@@ -2,7 +2,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
+import { loadColorScheme, persistColorScheme } from "./lib/colorScheme";
 import "./index.css";
+
+persistColorScheme(loadColorScheme());
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

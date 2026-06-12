@@ -17,7 +17,7 @@ interface GameLoadResponse {
 }
 
 /** Leagues exposed in the game picker (maps to `lib/championData` LEAGUE_IDS). */
-export type GameListLeague = "pll_regular" | "champ_series";
+export type GameListLeague = "pll_regular" | "champ_series" | "wll_regular" | "wll_champ_series";
 
 interface GameListResponse {
   season: number;

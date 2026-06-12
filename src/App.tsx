@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useCallback,
+  useId,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -24,6 +25,8 @@ import {
   AlertCircle,
   Target,
   Users,
+  Sun,
+  Moon,
 } from "lucide-react";
 import type { Game, Player, Shot, ShotResult, ArmAngleBucket } from "../lib/types";
 import {
@@ -37,11 +40,21 @@ import {
   isTrackerNoPlayerId,
 } from "../lib/types";
 import { API, type GameListLeague } from "./lib/api";
+import { loadColorScheme, persistColorScheme, type ColorScheme } from "./lib/colorScheme";
 import { Storage } from "./lib/storage";
 import { buildStatsMasterCsv, downloadCsv, incompleteShots } from "./lib/csv";
 import { pllShotDistanceYards } from "../lib/shotGraphicDistance";
 import { computeShotXg, type ShotXgContext } from "../lib/shotXg";
 import { sortShotsChronologically } from "../lib/metricFlow";
+import {
+  isWllGame,
+  wllFieldFormat,
+  wllPositionRank,
+  WLL_REGULAR_DEFENDER_ORDER,
+  WLL_REGULAR_SECOND_ASSIST_ORDER,
+  WLL_SIXES_DEFENDER_ORDER,
+  WLL_SIXES_SECOND_ASSIST_ORDER,
+} from "../lib/wllRoster";
 import fieldGraphicUrl from "../field.png";
 
 /** Tracking depth — "normal" asks only the 4 core fields; "advanced" asks everything. */
@@ -103,6 +116,18 @@ const TEAM_COLORS: Record<string, TeamStyle> = {
   ATL: { primary: "#38bdf8", accent: "#0c4a6e", name: "Atlas" },
   CHA: { primary: "#dc2626", accent: "#fecaca", name: "Chaos" },
   RED: { primary: "#16a34a", accent: "#bbf7d0", name: "Redwoods" },
+  WCHA: { primary: "#9d2235", accent: "#fcd34d", name: "Maryland Charm" },
+  WCHR: { primary: "#2563eb", accent: "#bfdbfe", name: "New York Charging" },
+  WGUA: { primary: "#1e3a5f", accent: "#fbbf24", name: "Boston Guard" },
+  WPLM: { primary: "#059669", accent: "#a7f3d0", name: "California Palms" },
+};
+
+/** WLL Champion squad codes → PLL CDN logo filenames */
+const WLL_LOGO_FILES: Record<string, string> = {
+  WCHA: "wll_maryland_charm_logo_primary.png",
+  WCHR: "wll_new_york_charging_logo_primary.png",
+  WGUA: "wll_boston_guard_logo_primary.png",
+  WPLM: "wll_california_palms_logo_primary.png",
 };
 
 /** Legacy Champion / stats codes → current PLL abbreviations */
@@ -124,14 +149,31 @@ function teamStyle(code: string): TeamStyle {
   return base ?? { primary: "#27272a", accent: "#71717a", name: code };
 }
 
+/** Mascot / nickname for UI labels — "Maryland Charm" → "Charm", "Outlaws" stays "Outlaws". */
+function teamShortName(code: string): string {
+  const parts = teamStyle(code).name.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1]! : parts[0]!;
+}
+
+function formatGameDate(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const d = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
 function canonicalTeamCode(code: string): string {
   const normalized = code.toUpperCase().trim();
   return TEAM_CODE_ALIASES[normalized] ?? normalized;
 }
 
 function teamLogoUrl(code: string): string {
-  const slug = teamStyle(code).name.toLowerCase();
   const canonical = canonicalTeamCode(code);
+  const wllFile = WLL_LOGO_FILES[canonical];
+  if (wllFile) {
+    return `https://img.premierlacrosseleague.com/Teams/2024/Logo/${wllFile}`;
+  }
+  const slug = teamStyle(code).name.toLowerCase();
   if (canonical === "OUT" || canonical === "WHP") {
     return `https://img.premierlacrosseleague.com/Teams/2026/Logo/${slug}-primary.webp`;
   }
@@ -158,6 +200,54 @@ function TeamLogo({ code, sizeClass = "h-4" }: { code: string; sizeClass?: strin
       className={`${sizeClass} w-auto max-w-[6rem] object-contain object-left shrink-0`}
       onError={() => setFailed(true)}
     />
+  );
+}
+
+function TeamMatchup({
+  awayCode,
+  homeCode,
+  logoSize = "h-4",
+  nameClass = "",
+}: {
+  awayCode: string;
+  homeCode: string;
+  logoSize?: string;
+  nameClass?: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2 flex-wrap">
+      <span className={`inline-flex items-center gap-1.5 ${nameClass}`}>
+        <TeamLogo code={awayCode} sizeClass={logoSize} />
+        <span>{teamShortName(awayCode)}</span>
+      </span>
+      <span className="text-zinc-500 font-normal">vs.</span>
+      <span className={`inline-flex items-center gap-1.5 ${nameClass}`}>
+        <TeamLogo code={homeCode} sizeClass={logoSize} />
+        <span>{teamShortName(homeCode)}</span>
+      </span>
+    </span>
+  );
+}
+
+function ThemeToggle({
+  colorScheme,
+  onToggle,
+  className = "",
+}: {
+  colorScheme: ColorScheme;
+  onToggle: () => void;
+  className?: string;
+}) {
+  const isDark = colorScheme === "dark";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      className={`p-2 rounded-md border border-zinc-700 bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 transition-colors shrink-0 ${className}`}
+    >
+      {isDark ? <Sun size={16} /> : <Moon size={16} />}
+    </button>
   );
 }
 
@@ -241,10 +331,13 @@ interface FieldProps {
   normalMode?: boolean;
   /** Active-shot context for live xG preview while hovering the field */
   xgContext?: ShotXgContext;
+  colorScheme?: ColorScheme;
 }
 
-const fieldGridLines = (() => {
+function buildFieldGridLines(isDark: boolean): ReactNode[] {
   const lines: ReactNode[] = [];
+  const majorStroke = isDark ? "rgba(140,140,140,0.5)" : "rgba(80,80,80,0.38)";
+  const minorStroke = isDark ? "rgba(100,100,100,0.28)" : "rgba(120,120,120,0.18)";
   for (let gx = 0; gx <= FIELD_PIXEL_W; gx += FIELD_GRID_MINOR) {
     const major = gx % FIELD_GRID_MAJOR === 0;
     lines.push(
@@ -254,7 +347,7 @@ const fieldGridLines = (() => {
         y1={0}
         x2={gx}
         y2={FIELD_PIXEL_H}
-        stroke={major ? "rgba(80,80,80,0.38)" : "rgba(120,120,120,0.18)"}
+        stroke={major ? majorStroke : minorStroke}
         strokeWidth={major ? 1.1 : 0.65}
         pointerEvents="none"
       />,
@@ -269,14 +362,14 @@ const fieldGridLines = (() => {
         y1={gy}
         x2={FIELD_PIXEL_W}
         y2={gy}
-        stroke={major ? "rgba(80,80,80,0.38)" : "rgba(120,120,120,0.18)"}
+        stroke={major ? majorStroke : minorStroke}
         strokeWidth={major ? 1.1 : 0.65}
         pointerEvents="none"
       />,
     );
   }
   return lines;
-})();
+}
 
 function Field({
   shots,
@@ -286,7 +379,10 @@ function Field({
   besideSidebar = false,
   normalMode = false,
   xgContext,
+  colorScheme = "dark",
 }: FieldProps) {
+  const isDark = colorScheme === "dark";
+  const fieldInvertFilterId = `field-invert-${useId().replace(/:/g, "")}`;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hoverCoord, setHoverCoord] = useState<{
     px: number;
@@ -340,6 +436,18 @@ function Field({
           onMouseMove={handleMove}
           onMouseLeave={() => setHoverCoord(null)}
         >
+        <defs>
+          {/* Partial invert: dark bg stays dark, markings land ~50% gray instead of solid white */}
+          <filter id={fieldInvertFilterId} colorInterpolationFilters="sRGB">
+            <feColorMatrix
+              type="matrix"
+              values="-0.52 0 0 0 0.52  0 -0.52 0 0 0.52  0 0 -0.52 0 0.52  0 0 0 1 0"
+            />
+          </filter>
+        </defs>
+        {isDark ? (
+          <rect x={0} y={0} width={FIELD_PIXEL_W} height={FIELD_PIXEL_H} fill="#0a0a0a" />
+        ) : null}
         <image
           href={fieldGraphicUrl}
           x={0}
@@ -347,8 +455,9 @@ function Field({
           width={FIELD_PIXEL_W}
           height={FIELD_PIXEL_H}
           preserveAspectRatio="none"
+          filter={isDark ? `url(#${fieldInvertFilterId})` : undefined}
         />
-        <g className="pointer-events-none">{fieldGridLines}</g>
+        <g className="pointer-events-none">{buildFieldGridLines(isDark)}</g>
 
         {shots
           .filter((s) => s.x !== null && s.y !== null)
@@ -368,7 +477,7 @@ function Field({
                   cy={pllYToViewBoxY(s.y!)}
                   r={shotMarkerR(isActive)}
                   fill={color}
-                  stroke={isActive ? "#0a2540" : "#ffffff"}
+                  stroke={isActive ? (isDark ? "#ffffff" : "#0a2540") : isDark ? "#ffffff" : "#18181b"}
                   strokeWidth={isActive ? 3 : 2}
                   opacity={isActive ? 1 : 0.88}
                 />
@@ -383,7 +492,7 @@ function Field({
               y1={0}
               x2={hoverCoord.px}
               y2={FIELD_PIXEL_H}
-              stroke="#0a2540"
+              stroke={isDark ? "#a1a1aa" : "#0a2540"}
               strokeWidth={1.25}
               opacity={0.45}
               pointerEvents="none"
@@ -393,7 +502,7 @@ function Field({
               y1={hoverCoord.py}
               x2={FIELD_PIXEL_W}
               y2={hoverCoord.py}
-              stroke="#0a2540"
+              stroke={isDark ? "#a1a1aa" : "#0a2540"}
               strokeWidth={1.25}
               opacity={0.45}
               pointerEvents="none"
@@ -437,6 +546,7 @@ interface GoalPlanePickerProps {
   onGoalClick: (p: { net_x: number; net_y: number }) => void;
   /** When false, net/miss plane is display-only (e.g. net pick only on GOAL) */
   interactive?: boolean;
+  colorScheme?: ColorScheme;
 }
 
 function GoalPlanePicker({
@@ -445,7 +555,9 @@ function GoalPlanePicker({
   onGoalClick,
   onGoal,
   interactive = true,
+  colorScheme = "dark",
 }: GoalPlanePickerProps) {
+  const isDark = colorScheme === "dark";
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   const VB = onGoal
@@ -486,7 +598,7 @@ function GoalPlanePicker({
         viewBox={`0 0 ${VB.w} ${VB.h}`}
         className="w-full h-full rounded"
         style={{
-          background: onGoal ? "#1a1a1a" : "#0a0a0a",
+          background: isDark ? (onGoal ? "#1a1a1a" : "#0a0a0a") : onGoal ? "#e4e4e7" : "#f4f4f5",
           cursor: interactive ? "crosshair" : "not-allowed",
         }}
         onClick={handleClick}
@@ -938,10 +1050,18 @@ function positionRankForOrder(canonical: string, order: readonly string[]): numb
   return 100 + canonical.charCodeAt(0);
 }
 
-function sortPlayersByPositionOrder(players: Player[], order: readonly string[]): Player[] {
+function sortPlayersByPositionOrder(
+  players: Player[],
+  order: readonly string[],
+  wll = false,
+): Player[] {
   return [...players].sort((a, b) => {
-    const ra = positionRankForOrder(canonicalPositionCode(a.position), order);
-    const rb = positionRankForOrder(canonicalPositionCode(b.position), order);
+    const ra = wll
+      ? wllPositionRank(a.position, order)
+      : positionRankForOrder(canonicalPositionCode(a.position), order);
+    const rb = wll
+      ? wllPositionRank(b.position, order)
+      : positionRankForOrder(canonicalPositionCode(b.position), order);
     if (ra !== rb) return ra - rb;
     return a.number - b.number || a.name.localeCompare(b.name);
   });
@@ -952,6 +1072,8 @@ interface PlayerPickerProps {
   roster: Player[];
   /** Controls roster sort order in the dropdown */
   positionOrder: readonly string[];
+  /** WLL: hide position labels; sort by jersey number */
+  wllPositions?: boolean;
   noneLabel: string;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
@@ -1045,6 +1167,7 @@ function PlayerPicker({
   label,
   roster,
   positionOrder,
+  wllPositions = false,
   noneLabel,
   selectedId,
   onSelect,
@@ -1072,7 +1195,12 @@ function PlayerPicker({
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
-  const sortedRoster = useMemo(() => sortPlayersByPositionOrder(roster, positionOrder), [roster, positionOrder]);
+  const sortedRoster = useMemo(() => {
+    if (wllPositions) {
+      return [...roster].sort((a, b) => a.number - b.number || a.name.localeCompare(b.name));
+    }
+    return sortPlayersByPositionOrder(roster, positionOrder, false);
+  }, [roster, positionOrder, wllPositions]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1081,15 +1209,70 @@ function PlayerPicker({
       (p) =>
         p.name.toLowerCase().includes(q) ||
         String(p.number).includes(query.trim()) ||
-        p.position.toLowerCase().includes(q),
+        (!wllPositions && p.position.toLowerCase().includes(q)),
     );
-  }, [query, sortedRoster]);
+  }, [query, sortedRoster, wllPositions]);
 
   const selectedPlayer =
     selectedId && !isTrackerNoPlayerId(selectedId) ? roster.find((p) => p.player_id === selectedId) : undefined;
   const selectedNone = isTrackerNoPlayerId(selectedId);
 
   const triggerBody = () => {
+    if (hideLabel) {
+      const avatarCls = micro ? "w-6 h-6" : "w-7 h-7";
+      const roleClass = micro
+        ? "text-[6px] uppercase tracking-wide text-zinc-500 font-mono leading-none truncate"
+        : "text-[7px] uppercase tracking-wide text-zinc-500 font-mono leading-none truncate";
+      const nameClass = micro
+        ? "text-[8px] font-semibold leading-tight truncate"
+        : "text-[10px] font-semibold leading-tight truncate";
+
+      const roleLine = <div className={roleClass}>{label}</div>;
+
+      const bodyRow = (avatar: ReactNode, nameContent: ReactNode, nameMuted = false) => (
+        <div className="flex items-center gap-1.5 min-w-0 w-full h-full">
+          <div className="shrink-0">{avatar}</div>
+          <div className="min-w-0 flex flex-col justify-center gap-px flex-1">
+            {roleLine}
+            <div className={`${nameClass} ${nameMuted ? "text-zinc-500" : "text-zinc-100"}`}>
+              {nameContent}
+            </div>
+          </div>
+        </div>
+      );
+
+      if (selectedPlayer) {
+        return bodyRow(
+          <PlayerThumb
+            p={selectedPlayer}
+            accentColor={accentColor}
+            sizeClass={avatarCls}
+            textClass={micro ? "text-[8px]" : "text-[10px]"}
+          />,
+          <span className="flex items-baseline gap-1 min-w-0">
+            <span className="font-mono text-zinc-400 shrink-0">#{selectedPlayer.number}</span>
+            <span className="truncate">{selectedPlayer.name}</span>
+          </span>,
+        );
+      }
+      if (selectedNone) {
+        return bodyRow(
+          <div
+            className={`${avatarCls} rounded border border-dashed border-zinc-600 bg-zinc-950 flex items-center justify-center font-mono font-bold text-zinc-500 text-[8px]`}
+          >
+            —
+          </div>,
+          noneLabel,
+          true,
+        );
+      }
+      return bodyRow(
+        <div className={`${avatarCls} rounded border border-dashed border-zinc-700 bg-zinc-950`} />,
+        "Select…",
+        true,
+      );
+    }
+
     if (selectedPlayer) {
       return (
         <PlayerAvatarNameBlock
@@ -1111,8 +1294,12 @@ function PlayerPicker({
             <div
               className={`${compact ? "text-[8px] mt-0" : "text-[10px] mt-0.5"} text-zinc-500 font-mono truncate flex items-center gap-1`}
             >
-              <span>{selectedPlayer.position}</span>
-              <span>·</span>
+              {!wllPositions && (
+                <>
+                  <span>{selectedPlayer.position}</span>
+                  <span>·</span>
+                </>
+              )}
               <TeamLogo code={selectedPlayer.team} sizeClass={compact ? "h-2.5" : "h-3"} />
               {selectedPlayer.handedness ? <span>· {selectedPlayer.handedness}H</span> : null}
             </div>
@@ -1150,17 +1337,6 @@ function PlayerPicker({
         </div>
       );
     }
-    if (hideLabel) {
-      return (
-        <div
-          className={`text-zinc-500 font-mono truncate ${
-            micro ? "text-[8px] py-0.5 leading-tight" : compact ? "text-[11px] py-1" : "text-sm py-2"
-          } px-0.5`}
-        >
-          {label}
-        </div>
-      );
-    }
     return (
       <div
         className={`text-amber-500/95 ${micro ? "text-[8px] py-0.5 leading-tight" : compact ? "text-[11px] py-1" : "text-sm py-2"} px-0.5 font-medium`}
@@ -1190,8 +1366,16 @@ function PlayerPicker({
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setOpen(!open)}
-        className={`w-full bg-zinc-900 border border-zinc-800 hover:border-zinc-600 disabled:hover:border-zinc-800 rounded flex items-center text-left transition-colors ${
-          micro ? "px-1 py-0.5 gap-1" : compact ? "px-1.5 py-1 gap-2" : "px-2 py-2 gap-3"
+        className={`w-full bg-zinc-900 border border-zinc-800 hover:border-zinc-600 disabled:hover:border-zinc-800 rounded flex items-center text-left transition-colors overflow-hidden ${
+          hideLabel
+            ? micro
+              ? "h-8 px-1"
+              : "h-9 px-1.5"
+            : micro
+              ? "px-1 py-0.5 gap-1"
+              : compact
+                ? "px-1.5 py-1 gap-2"
+                : "px-2 py-2 gap-3"
         }`}
       >
         {triggerBody()}
@@ -1257,9 +1441,11 @@ function PlayerPicker({
                     <span className="font-mono text-amber-500/90 shrink-0">#{p.number}</span>
                     <span className="truncate">{p.name}</span>
                   </div>
-                  <div className={`text-zinc-500 font-mono ${micro ? "text-[9px] mt-0.5" : "text-[11px] mt-1"}`}>
-                    {p.position}
-                  </div>
+                  {!wllPositions && (
+                    <div className={`text-zinc-500 font-mono ${micro ? "text-[9px] mt-0.5" : "text-[11px] mt-1"}`}>
+                      {p.position}
+                    </div>
+                  )}
                 </div>
               </button>
             ))}
@@ -1435,8 +1621,14 @@ export default function App() {
   const [metricFlow, setMetricFlow] = useState<unknown | null>(null);
   const [pickerGames, setPickerGames] = useState<ApiMatchRow[]>([]);
   const [pickerSeason, setPickerSeason] = useState(() => new Date().getFullYear());
-  const [pickerLeague, setPickerLeague] = useState<GameListLeague>("pll_regular");
+  const [pickerFamily, setPickerFamily] = useState<"pll" | "wll">("pll");
+  const [pickerCompetition, setPickerCompetition] = useState<"regular" | "champ_series">("regular");
+  const pickerLeague = useMemo((): GameListLeague => {
+    if (pickerFamily === "pll") return pickerCompetition === "regular" ? "pll_regular" : "champ_series";
+    return pickerCompetition === "regular" ? "wll_regular" : "wll_champ_series";
+  }, [pickerFamily, pickerCompetition]);
   const [pickerLoading, setPickerLoading] = useState(false);
+  const [colorScheme, setColorScheme] = useState<ColorScheme>(loadColorScheme);
   const [trackingMode, setTrackingMode] = useState<TrackingMode>(loadTrackingMode);
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [timerFrozenAt, setTimerFrozenAt] = useState<number | null>(null);
@@ -1447,9 +1639,37 @@ export default function App() {
     localStorage.setItem(TRACKING_MODE_KEY, m);
   }, []);
 
+  const toggleColorScheme = useCallback(() => {
+    setColorScheme((prev) => {
+      const next: ColorScheme = prev === "dark" ? "light" : "dark";
+      persistColorScheme(next);
+      return next;
+    });
+  }, []);
+
   const isNormalMode = trackingMode === "normal";
   const shotComplete = isNormalMode ? isShotNormalTrackingComplete : isShotManualTrackingComplete;
   const shotProgress = isNormalMode ? hasNormalModeProgress : hasMeaningfulManualProgress;
+
+  const toggleTrackingMode = useCallback(() => {
+    setMode(isNormalMode ? "advanced" : "normal");
+  }, [isNormalMode, setMode]);
+
+  const isWllMatch = game ? isWllGame(game.home_team, game.away_team) : false;
+  const wllFormat = useMemo(() => {
+    if (!isWllMatch) return null;
+    return wllFieldFormat(Object.values(rosters).flat());
+  }, [isWllMatch, rosters]);
+  const defenderPositionOrder = isWllMatch
+    ? wllFormat === "regular"
+      ? WLL_REGULAR_DEFENDER_ORDER
+      : WLL_SIXES_DEFENDER_ORDER
+    : DEFENDER_POSITION_ORDER;
+  const secondAssistPositionOrder = isWllMatch
+    ? wllFormat === "regular"
+      ? WLL_REGULAR_SECOND_ASSIST_ORDER
+      : WLL_SIXES_SECOND_ASSIST_ORDER
+    : SECOND_ASSIST_POSITION_ORDER;
 
   const seasonYearOptions = useMemo(() => pickerSeasonYears(), []);
 
@@ -1634,22 +1854,30 @@ export default function App() {
     if (next >= 0) setActiveIdx(next);
   }, [shots, activeIdx]);
 
-  /** Normal mode: skip auto-advance when user navigates onto an already-complete shot. */
-  const completeOnNavRef = useRef(false);
-  useEffect(() => {
-    completeOnNavRef.current =
-      isNormalMode && activeShot ? isShotNormalTrackingComplete(activeShot) : false;
-  }, [activeIdx, activeShot?.shot_id, isNormalMode, activeShot]);
+  /**
+   * Auto-advance when the active shot becomes complete (same green logic as the timeline).
+   * Skip when the user navigates onto an already-complete shot.
+   */
+  const prevActiveIdxForAutoRef = useRef(activeIdx);
+  const skipAutoAdvanceRef = useRef(false);
 
   useEffect(() => {
-    if (!isNormalMode || !activeShot || activeShot.act === "TO") return;
-    if (!isShotNormalTrackingComplete(activeShot)) return;
+    const idxChanged = prevActiveIdxForAutoRef.current !== activeIdx;
+    if (idxChanged) {
+      prevActiveIdxForAutoRef.current = activeIdx;
+      skipAutoAdvanceRef.current = activeShot ? shotComplete(activeShot) : false;
+      return;
+    }
+
+    if (!activeShot || activeShot.act === "TO") return;
+    if (!shotComplete(activeShot)) return;
     if (activeIdx >= shots.length - 1) return;
-    if (completeOnNavRef.current) return;
-
-    completeOnNavRef.current = true;
+    if (skipAutoAdvanceRef.current) {
+      skipAutoAdvanceRef.current = false;
+      return;
+    }
     goNext();
-  }, [shots, activeIdx, activeShot, isNormalMode, goNext]);
+  }, [shots, activeIdx, activeShot, shotComplete, goNext]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1710,22 +1938,16 @@ export default function App() {
     downloadCsv(`shots_${gameId}.csv`, buildStatsMasterCsv(game, shots, rosters, metricFlow));
   };
 
+  const filterToggleOn = "bg-amber-600/25 text-amber-500";
+  const filterToggleOff = "bg-zinc-950 text-zinc-500 hover:text-zinc-200";
+
   // ── Game picker ─────────────────────────────────────────────────────────
   if (!gameId) {
-    const roundLabel = pickerLeague === "champ_series" ? "Round" : "Week";
-
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          background: "#0a0a0a",
-          fontFamily: "ui-sans-serif, system-ui, sans-serif",
-          color: "#e4e4e7",
-        }}
-      >
-        <div className="fixed top-4 right-4 z-20 flex flex-col items-end gap-2 sm:top-6 sm:right-6">
-          <label className="flex flex-col items-end gap-1">
-            <span className="text-[9px] uppercase tracking-widest text-zinc-500 font-mono">Season</span>
+      <div className="theme-page min-h-screen font-sans antialiased">
+        <div className="max-w-3xl mx-auto px-6 py-10">
+          <h1 className="text-4xl font-black tracking-tight mb-4">Shot Tracker</h1>
+          <div className="flex flex-wrap items-center gap-2 mb-8">
             <select
               value={pickerSeason}
               onChange={(e) => setPickerSeason(Number(e.target.value))}
@@ -1738,9 +1960,30 @@ export default function App() {
                 </option>
               ))}
             </select>
-          </label>
-          <div className="flex flex-col items-end gap-1">
-            <span className="text-[9px] uppercase tracking-widest text-zinc-500 font-mono">Competition</span>
+            <div
+              className="flex rounded-lg border border-zinc-700 overflow-hidden text-[11px] font-medium"
+              role="group"
+              aria-label="PLL or WLL"
+            >
+              <button
+                type="button"
+                onClick={() => setPickerFamily("pll")}
+                className={`px-3 py-1.5 transition-colors border-r border-zinc-700 ${
+                  pickerFamily === "pll" ? filterToggleOn : filterToggleOff
+                }`}
+              >
+                PLL
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerFamily("wll")}
+                className={`px-3 py-1.5 transition-colors ${
+                  pickerFamily === "wll" ? filterToggleOn : filterToggleOff
+                }`}
+              >
+                WLL
+              </button>
+            </div>
             <div
               className="flex rounded-lg border border-zinc-700 overflow-hidden text-[11px] font-medium"
               role="group"
@@ -1748,42 +1991,24 @@ export default function App() {
             >
               <button
                 type="button"
-                onClick={() => setPickerLeague("pll_regular")}
-                className={`px-3 py-1.5 transition-colors ${
-                  pickerLeague === "pll_regular"
-                    ? "bg-amber-600/25 text-amber-400 border-r border-zinc-700"
-                    : "bg-zinc-950 text-zinc-400 hover:text-zinc-200 border-r border-zinc-700"
+                onClick={() => setPickerCompetition("regular")}
+                className={`px-3 py-1.5 transition-colors border-r border-zinc-700 ${
+                  pickerCompetition === "regular" ? filterToggleOn : filterToggleOff
                 }`}
               >
                 Regular
               </button>
               <button
                 type="button"
-                onClick={() => setPickerLeague("champ_series")}
+                onClick={() => setPickerCompetition("champ_series")}
                 className={`px-3 py-1.5 transition-colors ${
-                  pickerLeague === "champ_series"
-                    ? "bg-amber-600/25 text-amber-400"
-                    : "bg-zinc-950 text-zinc-400 hover:text-zinc-200"
+                  pickerCompetition === "champ_series" ? filterToggleOn : filterToggleOff
                 }`}
               >
                 Champ series
               </button>
             </div>
-          </div>
-        </div>
-
-        <div className="max-w-3xl mx-auto px-6 py-16">
-          <div className="mb-10 pr-36 sm:pr-44">
-            <div className="text-[10px] uppercase tracking-[0.3em] text-amber-500 font-mono mb-3">
-              PLL Advanced Stats
-            </div>
-            <h1 className="text-4xl font-black tracking-tight">Shot Tracker</h1>
-            <p className="text-zinc-500 mt-2 text-sm">
-              Select a game to begin tracking. Shot metadata loads automatically from Champion Data.
-            </p>
-            <p className="text-zinc-600 mt-1 text-xs font-mono">
-              {pickerSeason} · {pickerLeague === "champ_series" ? "Champ Series" : "Regular season"}
-            </p>
+            <ThemeToggle colorScheme={colorScheme} onToggle={toggleColorScheme} />
           </div>
           <div className="space-y-2">
             {pickerLoading ? (
@@ -1804,22 +2029,16 @@ export default function App() {
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs font-mono text-zinc-500">
-                        #{g.game_number} · {g.date ?? "—"} · {roundLabel} {g.week ?? "?"}
-                      </div>
+                      <div className="text-xs text-zinc-500">{formatGameDate(g.date)}</div>
                       <div className="text-sm font-semibold mt-0.5 flex items-center gap-2 flex-wrap">
-                        <span>
-                          {roundLabel} {g.week ?? "?"} —
+                        <span className="text-xs font-mono text-zinc-500 shrink-0">
+                          WK {g.week ?? "?"}
                         </span>
                         {g.away && g.home ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <TeamLogo code={g.away} sizeClass="h-4" />
-                            <span className="text-zinc-500 font-normal">@</span>
-                            <TeamLogo code={g.home} sizeClass="h-4" />
-                          </span>
+                          <TeamMatchup awayCode={g.away} homeCode={g.home} logoSize="h-4" />
                         ) : (
                           <span>
-                            {g.away ?? "?"} @ {g.home ?? "?"}
+                            {g.away ?? "?"} vs. {g.home ?? "?"}
                           </span>
                         )}
                       </div>
@@ -1837,10 +2056,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <div
-        style={{ minHeight: "100vh", background: "#0a0a0a", color: "#e4e4e7" }}
-        className="flex items-center justify-center font-mono text-xs"
-      >
+      <div className="theme-page min-h-screen flex items-center justify-center font-mono text-xs">
         Loading game data from Champion Data…
       </div>
     );
@@ -1848,10 +2064,7 @@ export default function App() {
 
   if (!loading && shots.length === 0) {
     return (
-      <div
-        style={{ minHeight: "100vh", background: "#0a0a0a", color: "#e4e4e7" }}
-        className="flex flex-col items-center justify-center gap-4 font-mono text-sm px-6 text-center"
-      >
+      <div className="theme-page min-h-screen flex flex-col items-center justify-center gap-4 font-mono text-sm px-6 text-center">
         <p>No shot events for this match.</p>
         <button
           type="button"
@@ -1866,10 +2079,7 @@ export default function App() {
 
   if (!activeShot) {
     return (
-      <div
-        style={{ minHeight: "100vh", background: "#0a0a0a", color: "#e4e4e7" }}
-        className="flex items-center justify-center font-mono text-xs"
-      >
+      <div className="theme-page min-h-screen flex items-center justify-center font-mono text-xs">
         No active shot.
       </div>
     );
@@ -1889,70 +2099,45 @@ export default function App() {
   const handForArmArc: "L" | "R" = shotHand ?? "R";
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#0a0a0a",
-        color: "#e4e4e7",
-        fontFamily: "ui-sans-serif, system-ui, sans-serif",
-      }}
-    >
+    <div className="theme-page min-h-screen font-sans antialiased">
       <div className="border-b border-zinc-900 bg-zinc-950/50">
         <div className="flex justify-center px-4 py-1.5">
-          <div className={`${TRACKER_CONTENT_CLASS} flex items-center justify-between gap-3`}>
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          <div className={`${TRACKER_CONTENT_CLASS} grid grid-cols-[1fr_auto_1fr] items-center gap-3`}>
+            <div className="flex items-center gap-2 justify-self-start min-w-0">
               <button
                 type="button"
                 onClick={() => navigate("/")}
-                className="text-[9px] text-zinc-500 hover:text-zinc-300 font-mono shrink-0"
+                className="p-0.5 text-zinc-500 hover:text-zinc-300 shrink-0"
+                aria-label="Back to games"
               >
-                ← GAMES
+                <ChevronLeft size={18} />
               </button>
+              <ThemeToggle colorScheme={colorScheme} onToggle={toggleColorScheme} className="!p-1" />
+              <button
+                type="button"
+                onClick={toggleTrackingMode}
+                className="px-2 py-0.5 rounded border border-zinc-700 text-[9px] font-mono font-bold bg-amber-600/25 text-amber-400 transition-colors hover:bg-amber-600/35 shrink-0"
+                aria-label={`Switch to ${isNormalMode ? "advanced" : "normal"} mode`}
+              >
+                {isNormalMode ? "ADVANCED" : "NORMAL"}
+              </button>
+            </div>
+            <div className="flex items-center justify-center gap-2 min-w-0 text-[9px] font-mono text-zinc-300">
               {game ? (
-                <div className="flex items-center gap-2 min-w-0 text-[9px] font-mono text-zinc-300 truncate">
-                  <span className="text-zinc-500 shrink-0">Wk {game.week}</span>
-                  <span className="text-zinc-600 shrink-0">·</span>
-                  <span className="shrink-0">#{game.game_number}</span>
-                  <span className="text-zinc-600 shrink-0">·</span>
-                  <span className="flex items-center gap-1.5 shrink-0">
-                    <TeamLogo code={game.away_team} sizeClass="h-6" />
-                    <span className="text-zinc-600">@</span>
-                    <TeamLogo code={game.home_team} sizeClass="h-6" />
-                  </span>
-                </div>
+                <>
+                  <span className="text-zinc-500 shrink-0">WK {game.week}</span>
+                  <TeamMatchup
+                    awayCode={game.away_team}
+                    homeCode={game.home_team}
+                    logoSize="h-5"
+                    nameClass="text-[9px] font-mono"
+                  />
+                </>
               ) : (
-                <span className="text-[9px] font-mono text-zinc-400 truncate">Match {gameId}</span>
+                <span className="text-zinc-400 truncate">Match {gameId}</span>
               )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <div
-                className="flex rounded border border-zinc-700 overflow-hidden text-[9px] font-mono font-bold"
-                role="group"
-                aria-label="Tracking mode"
-              >
-                <button
-                  type="button"
-                  onClick={() => setMode("normal")}
-                  className={`px-2 py-0.5 transition-colors border-r border-zinc-700 ${
-                    isNormalMode
-                      ? "bg-amber-600/25 text-amber-400"
-                      : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"
-                  }`}
-                >
-                  NORMAL
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode("advanced")}
-                  className={`px-2 py-0.5 transition-colors ${
-                    !isNormalMode
-                      ? "bg-amber-600/25 text-amber-400"
-                      : "bg-zinc-950 text-zinc-500 hover:text-zinc-200"
-                  }`}
-                >
-                  ADVANCED
-                </button>
-              </div>
+            <div className="flex items-center gap-2 justify-self-end shrink-0">
               <div
                 className={`text-[10px] font-mono whitespace-nowrap tabular-nums ${
                   timerFrozenAt !== null ? "text-green-500" : "text-zinc-300"
@@ -2053,13 +2238,14 @@ export default function App() {
         {isNormalMode ? (
           <div className="flex justify-center w-full min-w-0">
             <div className={`${TRACKER_CONTENT_CLASS} flex flex-col gap-2`}>
-              <div className="grid w-full min-w-0 grid-cols-[1fr_1fr_6.5rem] gap-2 items-end">
+              <div className="grid w-full min-w-0 grid-cols-[1fr_1fr_6.5rem] gap-2 items-stretch">
                 <PlayerPicker
                   compact
                   hideLabel
                   label="Closest Defender"
                   roster={defensiveRoster}
-                  positionOrder={DEFENDER_POSITION_ORDER}
+                  positionOrder={defenderPositionOrder}
+                  wllPositions={isWllMatch}
                   noneLabel="None"
                   selectedId={activeShot.closest_defender_id}
                   onSelect={(id) => setShotPlayerField("closest_defender_id", "closest_defender", id)}
@@ -2071,7 +2257,8 @@ export default function App() {
                   hideLabel
                   label="2nd Assist"
                   roster={offensiveRoster}
-                  positionOrder={SECOND_ASSIST_POSITION_ORDER}
+                  positionOrder={secondAssistPositionOrder}
+                  wllPositions={isWllMatch}
                   noneLabel="None"
                   selectedId={activeShot.second_assist_id}
                   onSelect={(id) => setShotPlayerField("second_assist_id", "second_assist", id)}
@@ -2079,24 +2266,25 @@ export default function App() {
                   accentColor={offTeamColor.accent}
                   disabled={!activeShot.first_assist}
                 />
-                <div className="min-w-0 flex flex-col justify-end">
-                  <div className="w-full bg-zinc-900 border border-zinc-800 rounded flex items-center px-1.5 py-0.5">
-                    <input
-                      type="number"
-                      min={SHOT_CLOCK_MIN}
-                      max={SHOT_CLOCK_MAX}
-                      step={1}
-                      inputMode="numeric"
-                      value={activeShot.shot_clock ?? ""}
-                      onChange={(e) => {
-                        const next = shotClockFromInput(e.target.value);
-                        if (next === undefined) return;
-                        updateShot({ shot_clock: next });
-                      }}
-                      placeholder="Shot Clock"
-                      className="w-full h-6 bg-transparent border-0 px-0 text-[10px] text-center font-mono text-zinc-100 placeholder:text-zinc-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    />
+                <div className="min-w-0 h-9 bg-zinc-900 border border-zinc-800 rounded flex flex-col justify-center px-1.5 py-0.5">
+                  <div className="text-[7px] uppercase tracking-wide text-zinc-500 font-mono leading-none truncate">
+                    Shot Clock
                   </div>
+                  <input
+                    type="number"
+                    min={SHOT_CLOCK_MIN}
+                    max={SHOT_CLOCK_MAX}
+                    step={1}
+                    inputMode="numeric"
+                    value={activeShot.shot_clock ?? ""}
+                    onChange={(e) => {
+                      const next = shotClockFromInput(e.target.value);
+                      if (next === undefined) return;
+                      updateShot({ shot_clock: next });
+                    }}
+                    placeholder="—"
+                    className="w-full h-4 bg-transparent border-0 px-0 text-[10px] text-center font-mono text-zinc-100 placeholder:text-zinc-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
                 </div>
               </div>
 
@@ -2107,18 +2295,20 @@ export default function App() {
                 onFieldClick={(c) => updateShot({ x: c.x, y: c.y })}
                 onHoverShot={setHoverShot}
                 xgContext={fieldXgContext}
+                colorScheme={colorScheme}
               />
             </div>
           </div>
         ) : (
           <>
-        <div className="grid w-full min-w-0 grid-cols-[37.5%_37.5%_25%] gap-x-0.5 gap-y-0 items-end">
+        <div className="grid w-full min-w-0 grid-cols-[37.5%_37.5%_25%] gap-x-0.5 gap-y-0 items-stretch">
           <PlayerPicker
             micro
             hideLabel
             label="Closest Defender"
             roster={defensiveRoster}
-            positionOrder={DEFENDER_POSITION_ORDER}
+            positionOrder={defenderPositionOrder}
+            wllPositions={isWllMatch}
             noneLabel="None"
             selectedId={activeShot.closest_defender_id}
             onSelect={(id) => setShotPlayerField("closest_defender_id", "closest_defender", id)}
@@ -2131,7 +2321,8 @@ export default function App() {
             hideLabel
             label="2nd Assist"
             roster={offensiveRoster}
-            positionOrder={SECOND_ASSIST_POSITION_ORDER}
+            positionOrder={secondAssistPositionOrder}
+            wllPositions={isWllMatch}
             noneLabel="None"
             selectedId={activeShot.second_assist_id}
             onSelect={(id) => setShotPlayerField("second_assist_id", "second_assist", id)}
@@ -2140,8 +2331,11 @@ export default function App() {
             disabled={!activeShot.first_assist}
           />
 
-          <div className="min-w-0 flex flex-row gap-px h-full">
-            <div className="min-w-0 basis-1/2 flex flex-col justify-end">
+          <div className="min-w-0 flex flex-row gap-px h-8">
+            <div className="min-w-0 basis-1/2 h-8 bg-zinc-900 border border-zinc-800 rounded flex flex-col justify-center px-0.5 py-0.5">
+              <div className="text-[6px] uppercase tracking-wide text-zinc-500 font-mono leading-none truncate">
+                Shot Clock
+              </div>
               <input
                 type="number"
                 min={SHOT_CLOCK_MIN}
@@ -2154,8 +2348,8 @@ export default function App() {
                   if (next === undefined) return;
                   updateShot({ shot_clock: next });
                 }}
-                placeholder="Shot Clock"
-                className="w-full h-[1.35rem] bg-zinc-900 border border-zinc-800 rounded px-0.5 text-[10px] font-mono text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-amber-500"
+                placeholder="—"
+                className="w-full h-3.5 bg-transparent border-0 px-0 text-[10px] font-mono text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
             <div className="min-w-0 basis-1/2 flex flex-col justify-end">
@@ -2206,6 +2400,7 @@ export default function App() {
               onFieldClick={(c) => updateShot({ x: c.x, y: c.y })}
               onHoverShot={setHoverShot}
               xgContext={fieldXgContext}
+              colorScheme={colorScheme}
             />
             {activeShot.act !== "TO" && (
               <div className="flex gap-2 min-w-0 mt-1">
@@ -2290,6 +2485,7 @@ export default function App() {
                   netX={activeShot.net_x}
                   netY={activeShot.net_y}
                   onGoalClick={({ net_x, net_y }) => updateShot({ net_x, net_y })}
+                  colorScheme={colorScheme}
                 />
               </div>
               {activeShot.net_x !== null && (

@@ -23,9 +23,15 @@ import { getRostersForGameTryWeeks } from "../../lib/pllStats.js";
 import type { Player } from "../../lib/types.js";
 import { extractGame, extractShots, joinPllStats } from "../../lib/shotTransform.js";
 import { gameNumberForMatch, sortMatchesChronologically } from "../../lib/scheduleGameNumber.js";
+import { isWllGame } from "../../lib/wllRoster.js";
 
 async function resolveGameNumber(matchId: string, season: number): Promise<number> {
-  for (const league_id of [LEAGUE_IDS.pll_regular, LEAGUE_IDS.champ_series]) {
+  for (const league_id of [
+    LEAGUE_IDS.pll_regular,
+    LEAGUE_IDS.champ_series,
+    LEAGUE_IDS.wll_regular,
+    LEAGUE_IDS.wll_champ_series,
+  ]) {
     const schedule = await getSchedule({ season_id: season, league_id });
     const sorted = sortMatchesChronologically(schedule.matches ?? []);
     const n = gameNumberForMatch(sorted, matchId);
@@ -50,26 +56,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const shots = extractShots(game, match, matchShots.shots ?? []);
 
     const personsPayload = (await getMatchPersons(matchId)) as ChampionMatchPersonsResponse;
-    const fromCd = rosterPlayersFromChampionPersons(personsPayload, game.home_team, game.away_team);
+    const fromCd = rosterPlayersFromChampionPersons(
+      personsPayload,
+      game.home_team,
+      game.away_team,
+      game.season,
+    );
     let homePlayers: Player[] = fromCd.home;
     let awayPlayers: Player[] = fromCd.away;
 
-    try {
-      const m = match as Record<string, unknown>;
-      const weekCandidates = [
-        game.week,
-        typeof m.phaseWeekNumber === "number" ? m.phaseWeekNumber : undefined,
-        typeof m.weekNumber === "number" ? m.weekNumber : undefined,
-      ];
-      const pll = await getRostersForGameTryWeeks({
-        season: game.season,
-        weeks: weekCandidates.filter((x): x is number => typeof x === "number" && x > 0),
-        match_external_id: matchId,
-      });
-      homePlayers = enrichChampionRosterWithPllSide(homePlayers, pll.home);
-      awayPlayers = enrichChampionRosterWithPllSide(awayPlayers, pll.away);
-    } catch (err) {
-      console.warn(`PLL Stats roster enrichment failed for ${matchId} — using Champion persons only:`, err);
+    if (!isWllGame(game.home_team, game.away_team)) {
+      try {
+        const m = match as Record<string, unknown>;
+        const weekCandidates = [
+          game.week,
+          typeof m.phaseWeekNumber === "number" ? m.phaseWeekNumber : undefined,
+          typeof m.weekNumber === "number" ? m.weekNumber : undefined,
+        ];
+        const pll = await getRostersForGameTryWeeks({
+          season: game.season,
+          weeks: weekCandidates.filter((x): x is number => typeof x === "number" && x > 0),
+          match_external_id: matchId,
+        });
+        homePlayers = enrichChampionRosterWithPllSide(homePlayers, pll.home);
+        awayPlayers = enrichChampionRosterWithPllSide(awayPlayers, pll.away);
+      } catch (err) {
+        console.warn(`PLL Stats roster enrichment failed for ${matchId} — using Champion persons only:`, err);
+      }
     }
 
     const allPlayers = [...homePlayers, ...awayPlayers];

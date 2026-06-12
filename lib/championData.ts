@@ -9,16 +9,16 @@
 
 const CHAMPION_BASE = "https://api.lacrosse.championdata.io";
 
-// PLL's league ID conventions (from Notion doc):
+// Champion league IDs:
 //   1 = PLL Regular Season
-//   5 = Champ Series
+//   5 = PLL Champ Series
 //   6 = WLL Champ Series
-//   7 = WLL Regular Season (likely)
+//   8 = WLL Regular Season
 export const LEAGUE_IDS = {
   pll_regular: 1,
   champ_series: 5,
   wll_champ_series: 6,
-  wll_regular: 7,
+  wll_regular: 8,
 } as const;
 
 function getBasicAuthorization(): string {

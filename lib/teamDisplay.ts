@@ -20,6 +20,10 @@ const CODE_TO_CITY: Record<string, string> = {
   ATL: "New York",
   CHA: "Charlotte",
   RED: "California",
+  WCHA: "Maryland",
+  WCHR: "New York",
+  WGUA: "Boston",
+  WPLM: "California",
 };
 
 export function opposingTeamCity(teamAbbrev: string | null | undefined): string {
