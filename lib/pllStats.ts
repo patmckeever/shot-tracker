@@ -12,6 +12,8 @@
  * - `Team` has no `teamCode`; use `officialId` as the roster team key when joining downstream.
  * - `seasonEvents.week` is typed as String (pass e.g. `"1"` from numeric week).
  * - Events align with Champion via `externalEventId` (match ID string).
+ * - `seasonEvents.externalId` is the PLL event slug (e.g. `"2025_ev_1"`).
+ * - `seasonEvents.location` is the human-readable market (e.g. `"Albany, NY"`).
  * - Roster rows expose `handedness`, `country`, `profileUrl` on `playersGameStats` (`Player`).
  */
 
@@ -45,7 +47,7 @@ async function gql<T>(query: string, variables: Record<string, any> = {}): Promi
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Roster query — both teams in one round trip via seasonEvents shape
+// Roster + event metadata query — seasonEvents in one round trip
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ROSTER_QUERY = `
@@ -53,6 +55,9 @@ const ROSTER_QUERY = `
     seasonEvents(season: $season, week: $week, includeCS: true) {
       week
       externalEventId
+      externalId
+      seasonSegment
+      location
       homeTeam {
         officialId
         playersGameStats {
@@ -81,6 +86,22 @@ const ROSTER_QUERY = `
   }
 `;
 
+export interface PllEventContext {
+  /** PLL slug, e.g. "2025_ev_1" */
+  external_id: string;
+  /** Champion match ID — join key */
+  external_event_id: string;
+  season_segment: string;
+  location: string | null;
+  week: string | number;
+}
+
+export interface GameRostersResult {
+  home: Player[];
+  away: Player[];
+  event: PllEventContext;
+}
+
 interface RosterPlayerRaw {
   officialId: string;
   name: string;
@@ -96,24 +117,38 @@ interface RosterTeamRaw {
   playersGameStats: RosterPlayerRaw[];
 }
 
+interface SeasonEventRaw {
+  week: string | number;
+  externalEventId: string;
+  externalId: string;
+  seasonSegment: string;
+  location: string | null;
+  homeTeam: RosterTeamRaw;
+  awayTeam: RosterTeamRaw;
+}
+
 interface SeasonEventsResponse {
-  seasonEvents: {
-    week: number;
-    externalEventId: string;
-    homeTeam: RosterTeamRaw;
-    awayTeam: RosterTeamRaw;
-  }[];
+  seasonEvents: SeasonEventRaw[];
+}
+
+function mapEventContext(event: SeasonEventRaw): PllEventContext {
+  return {
+    external_id: event.externalId,
+    external_event_id: event.externalEventId,
+    season_segment: event.seasonSegment,
+    location: event.location,
+    week: event.week,
+  };
 }
 
 /**
- * Fetch rosters for a specific week in a specific season.
- * Returns one Roster per team (home and away) for the matching event.
+ * Fetch rosters and PLL event metadata for a specific week in a specific season.
  */
 export async function getRostersForGame(opts: {
   season: number;
   week: number;
   match_external_id: string;
-}): Promise<{ home: Player[]; away: Player[] }> {
+}): Promise<GameRostersResult> {
   const data = await gql<SeasonEventsResponse>(ROSTER_QUERY, {
     season: opts.season,
     week: String(opts.week),
@@ -127,6 +162,7 @@ export async function getRostersForGame(opts: {
   return {
     home: event.homeTeam.playersGameStats.map((p) => mapPlayer(p, event.homeTeam.officialId)),
     away: event.awayTeam.playersGameStats.map((p) => mapPlayer(p, event.awayTeam.officialId)),
+    event: mapEventContext(event),
   };
 }
 
@@ -137,7 +173,7 @@ export async function getRostersForGameTryWeeks(opts: {
   season: number;
   weeks: number[];
   match_external_id: string;
-}): Promise<{ home: Player[]; away: Player[] }> {
+}): Promise<GameRostersResult> {
   const uniq = [...new Set(opts.weeks.filter((w) => typeof w === "number" && w > 0))];
   const attemptWeeks = uniq.length > 0 ? uniq : [1];
 

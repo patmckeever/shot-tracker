@@ -4,7 +4,7 @@
 
 import type { Player } from "./types.js";
 
-export const WLL_TEAM_CODES = new Set(["WCHA", "WCHR", "WGUA", "WPLM"]);
+export const WLL_TEAM_CODES = new Set(["WCHA", "WCHR", "WGUA", "WPLM", "MDC", "NYC"]);
 
 export function isWllTeamCode(code: string): boolean {
   return WLL_TEAM_CODES.has(code.toUpperCase().trim());

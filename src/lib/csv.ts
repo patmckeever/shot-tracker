@@ -17,7 +17,7 @@ import {
   situationForExport,
 } from "../../lib/csvFieldEncoding";
 import { pllShotDistanceYards } from "../../lib/shotGraphicDistance";
-import { opposingTeamCity } from "../../lib/teamDisplay";
+import { csvTeamName } from "../../lib/teamDisplay";
 import {
   deriveSaveSogFlags,
   passerShooterFlag,
@@ -168,7 +168,7 @@ export function buildStatsMasterCsv(
       escapeCsv(s.qtr),
       escapeCsv(s.unique_id),
       escapeCsv(s.game_id),
-      escapeCsv(s.team),
+      escapeCsv(csvTeamName(s.team)),
       escapeCsv(s.act),
       escapeCsv(s.player),
       escapeCsv(situationForExport(s)),
@@ -187,7 +187,7 @@ export function buildStatsMasterCsv(
       escapeCsv(shotDist),
       escapeCsv(s.shot_clock),
       escapeCsv(s.closest_defender),
-      escapeCsv(opposingTeamCity(s.opposing_team)),
+      escapeCsv(csvTeamName(s.opposing_team)),
       escapeCsv(s.goalie),
       escapeCsv(game.week),
       escapeCsv(game.date),

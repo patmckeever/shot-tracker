@@ -63,7 +63,7 @@ function normalizeScheduleMatchRow(
     round:
       weekNumber ??
       (typeof weekOrder === "number" ? weekOrder : typeof m.round === "number" ? m.round : undefined),
-    localStartTime: (m.localStartTime as string | undefined) ?? date?.utcMatchStart ?? date?.startDate ?? null,
+    localStartTime: (m.localStartTime as string | undefined) ?? date?.startDate ?? date?.utcMatchStart ?? null,
     homeSquadCode: (m.homeSquadCode as string | undefined) ?? squads?.home?.code ?? null,
     awaySquadCode: (m.awaySquadCode as string | undefined) ?? squads?.away?.code ?? null,
     venueCode: (m.venueCode as string | undefined) ?? venue?.code ?? null,

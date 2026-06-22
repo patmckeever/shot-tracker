@@ -64,9 +64,11 @@ export function extractGame(match: ChampionMatchInfo): Game {
       : typeof match.phaseWeekNumber === "number"
         ? match.phaseWeekNumber
         : 0;
+  const startDate = match.date?.startDate?.trim();
+  const utcStart = match.date?.utcMatchStart?.trim();
   const date =
-    (typeof match.date?.utcMatchStart === "string" ? match.date.utcMatchStart.slice(0, 10) : "") ||
-    match.date?.startDate ||
+    (startDate ? (startDate.includes("T") ? startDate.slice(0, 10) : startDate) : "") ||
+    (utcStart ? utcStart.slice(0, 10) : "") ||
     "";
 
   return {

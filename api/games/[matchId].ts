@@ -80,6 +80,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         homePlayers = enrichChampionRosterWithPllSide(homePlayers, pll.home);
         awayPlayers = enrichChampionRosterWithPllSide(awayPlayers, pll.away);
+        game.event_id = pll.event.external_id;
+        game.season_segment = pll.event.season_segment;
+        if (pll.event.location) game.location = pll.event.location;
       } catch (err) {
         console.warn(`PLL Stats roster enrichment failed for ${matchId} — using Champion persons only:`, err);
       }

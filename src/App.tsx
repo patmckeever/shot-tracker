@@ -115,17 +115,18 @@ const TEAM_COLORS: Record<string, TeamStyle> = {
   WAT: { primary: "#9333ea", accent: "#e9d5ff", name: "Waterdogs" },
   ATL: { primary: "#38bdf8", accent: "#0c4a6e", name: "Atlas" },
   CHA: { primary: "#dc2626", accent: "#fecaca", name: "Chaos" },
+  CHR: { primary: "#c0c0c0", accent: "#e5e7eb", name: "Chrome" },
   RED: { primary: "#16a34a", accent: "#bbf7d0", name: "Redwoods" },
-  WCHA: { primary: "#9d2235", accent: "#fcd34d", name: "Maryland Charm" },
-  WCHR: { primary: "#2563eb", accent: "#bfdbfe", name: "New York Charging" },
+  WCHR: { primary: "#9d2235", accent: "#fcd34d", name: "Maryland Charm" },
+  WCHA: { primary: "#2563eb", accent: "#bfdbfe", name: "New York Charging" },
   WGUA: { primary: "#1e3a5f", accent: "#fbbf24", name: "Boston Guard" },
   WPLM: { primary: "#059669", accent: "#a7f3d0", name: "California Palms" },
 };
 
 /** WLL Champion squad codes → PLL CDN logo filenames */
 const WLL_LOGO_FILES: Record<string, string> = {
-  WCHA: "wll_maryland_charm_logo_primary.png",
-  WCHR: "wll_new_york_charging_logo_primary.png",
+  WCHR: "wll_maryland_charm_logo_primary.png",
+  WCHA: "wll_new_york_charging_logo_primary.png",
   WGUA: "wll_boston_guard_logo_primary.png",
   WPLM: "wll_california_palms_logo_primary.png",
 };
@@ -140,6 +141,8 @@ const TEAM_CODE_ALIASES: Record<string, keyof typeof TEAM_COLORS | string> = {
   CAR: "CHA",
   CA: "RED",
   UTA: "ARC",
+  MDC: "WCHR",
+  NYC: "WCHA",
 };
 
 function teamStyle(code: string): TeamStyle {

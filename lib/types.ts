@@ -28,6 +28,12 @@ export interface Game {
   market: string;           // venue/market slug, e.g. "denver_2026"
   home_team: string;        // 3-letter abbreviation
   away_team: string;
+  /** @pll seasonEvents.externalId — e.g. "2025_ev_1" */
+  event_id?: string;
+  /** @pll seasonEvents.seasonSegment — e.g. "regular", "playoffs", "champ_series" */
+  season_segment?: string;
+  /** @pll seasonEvents.location — e.g. "Albany, NY" */
+  location?: string;
   // Which end each team attacks per quarter — needed for field render flip
   attack_directions?: Record<number, { [team: string]: "N" | "S" }>;
 }

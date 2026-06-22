@@ -36,6 +36,9 @@ async function main() {
       match_external_id: firstMatchId,
     });
     console.log(`✅ rosters — ${rosters.home.length} home, ${rosters.away.length} away`);
+    console.log(
+      `   event: ${rosters.event.external_id} | ${rosters.event.season_segment} | ${rosters.event.location ?? "—"}`,
+    );
 
     const sample = rosters.home[0];
     if (sample) {
